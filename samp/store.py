@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import os
 import re
 import sqlite3
 import threading
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 _IDENT = re.compile(r"^[A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*$")
+SQLITE_DIR = Path(os.getenv("SAMP_SQLITE_DIR", r"D:\codex\sqldb\realtime\samp"))
 
 
 class Store:
@@ -18,7 +20,7 @@ class Store:
     动态读取实际源表，因此程序不依赖固定的 source_rows 表。
     """
 
-    def __init__(self, definition_db: str | Path = "data/samp_define.db", source_db: str | Path = "data/source.db", result_dir: str | Path = "data/results"):
+    def __init__(self, definition_db: str | Path = SQLITE_DIR / "samp_define.db", source_db: str | Path = SQLITE_DIR / "source.db", result_dir: str | Path = SQLITE_DIR):
         self.definition_db = str(definition_db)
         self.default_source_db = str(source_db)
         self.result_dir = Path(result_dir)
@@ -43,7 +45,7 @@ class Store:
                 conn.execute("ALTER TABLE samp_define ADD COLUMN source_database TEXT NOT NULL DEFAULT ''")
 
     @staticmethod
-    def _public(row: sqlite3.Row, default_source_db: str = "data/source.db") -> dict[str, Any]:
+    def _public(row: sqlite3.Row, default_source_db: str = str(SQLITE_DIR / "source.db")) -> dict[str, Any]:
         data = dict(row)
         data["fields"] = [x for x in data.pop("field_name", "").split(",") if x]
         data["interval_seconds"] = data.pop("samp_time", 60)

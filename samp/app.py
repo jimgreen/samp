@@ -11,12 +11,12 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from .store import Store
+from .store import SQLITE_DIR, Store
 
 
 class DefinitionIn(BaseModel):
     name: str
-    source_database: str = "data/source.db"
+    source_database: str = str(SQLITE_DIR / "source.db")
     source_table: str
     fields: list[str] = Field(min_length=1)
     interval_seconds: int = Field(default=60, ge=0)
@@ -25,12 +25,12 @@ class DefinitionIn(BaseModel):
 
 
 class SourceRowsIn(BaseModel):
-    source_database: str = "data/source.db"
+    source_database: str = str(SQLITE_DIR / "source.db")
     source_table: str
     rows: list[dict[str, Any]]
 
 
-def create_app(definition_db: str = "data/samp_define.db", source_db: str = "data/source.db", result_dir: str = "data/results") -> FastAPI:
+def create_app(definition_db: str | Path = SQLITE_DIR / "samp_define.db", source_db: str | Path = SQLITE_DIR / "source.db", result_dir: str | Path = SQLITE_DIR) -> FastAPI:
     store = Store(definition_db, source_db, result_dir)
     stop = asyncio.Event()
 
@@ -142,7 +142,7 @@ HTML = """<!doctype html>
     <form id='definition-form' class='card'>
       <h2 id='form-title'>新建采样定义</h2><input type='hidden' id='definition-id'>
       <div class='field'><label>采样点名</label><input id='name' required placeholder='例如：电表A'></div>
-      <div class='field'><label>源数据库</label><input id='source-database' required value='data/source.db' placeholder='SQLite 数据库路径'></div>
+      <div class='field'><label>源数据库</label><input id='source-database' required value='D:/codex/sqldb/realtime/samp/source.db' placeholder='SQLite 数据库路径'></div>
       <div class='field'><label>源表</label><div style='display:flex;gap:6px'><input id='source-table' required list='source-table-options' placeholder='选择或输入真实表名'><button type='button' id='load-tables' class='btn'>读取表</button></div><datalist id='source-table-options'></datalist></div>
       <div class='actions'><button type='button' id='inspect-source' class='btn'>读取字段和预览</button></div>
       <div class='field'><label>采样字段</label><div id='definition-fields' class='field-list'><span class='muted'>先读取源表字段</span></div></div>
@@ -180,7 +180,7 @@ function checkedFields(container){return [...container.querySelectorAll('input[t
 function renderPreview(data){$('source-meta').innerHTML=`<span class='code'>${esc(data.source_database)} : ${esc(data.source_table)}</span> · ${data.fields.length} 个字段 · 显示 ${data.rows.length} 行`;if(!data.rows.length){$('source-preview').innerHTML='<div class="empty">源表没有数据</div>';return}const cols=data.fields;$('source-preview').innerHTML=`<table class='data-table'><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${data.rows.map(row=>`<tr>${cols.map(c=>`<td>${esc(row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`}
 async function inspectSource(){const db=$('source-database').value.trim(),table=$('source-table').value.trim();if(!db||!table){toast('请先填写源数据库和源表',true);return}try{const data=await api(`/api/source/inspect?source_database=${encodeURIComponent(db)}&source_table=${encodeURIComponent(table)}`);state.source=data;renderFieldChecks($('definition-fields'),data.fields,checkedFields($('definition-fields')));renderPreview(data);$('form-message').textContent='请选择要采样的字段后保存。';$('form-message').className='notice info'}catch(error){$('source-preview').innerHTML='';$('source-meta').textContent=error.message;toast(error.message,true)}}
 async function loadTables(){const db=$('source-database').value.trim();if(!db){toast('请先填写源数据库',true);return}try{const data=await api(`/api/source/tables?source_database=${encodeURIComponent(db)}`);$('source-table-options').innerHTML=data.tables.map(t=>`<option value='${esc(t)}'>`).join('');if(data.tables.length){$('source-table').value=data.tables[0];await inspectSource()}toast(`读取到 ${data.tables.length} 张表`)}catch(error){toast(error.message,true)}}
-function resetForm(){ $('definition-id').value='';$('form-title').textContent='新建采样定义';$('name').value='';$('source-database').value='data/source.db';$('source-table').value='';$('definition-fields').innerHTML='<span class="muted">先读取源表字段</span>';$('source-meta').textContent='尚未读取源表。';$('source-preview').innerHTML='';$('interval').value='60';$('filter').value='';$('enabled').checked=true;$('form-message').textContent='保存前请读取源表并选择字段。'}
+function resetForm(){ $('definition-id').value='';$('form-title').textContent='新建采样定义';$('name').value='';$('source-database').value='D:/codex/sqldb/realtime/samp/source.db';$('source-table').value='';$('definition-fields').innerHTML='<span class="muted">先读取源表字段</span>';$('source-meta').textContent='尚未读取源表。';$('source-preview').innerHTML='';$('interval').value='60';$('filter').value='';$('enabled').checked=true;$('form-message').textContent='保存前请读取源表并选择字段。'}
 function editDefinition(def){$('definition-id').value=def.id;$('form-title').textContent=`编辑采样定义：${def.samp_name}`;$('name').value=def.samp_name;$('source-database').value=def.source_database;$('source-table').value=def.source_table;$('interval').value=def.interval_seconds;$('filter').value=def.filter||'';$('enabled').checked=!!def.enabled;inspectSource().then(()=>renderFieldChecks($('definition-fields'),state.source?.fields||[],def.fields));window.scrollTo({top:0,behavior:'smooth'})}
 function renderDefinitions(){ $('definition-count').textContent=`共 ${state.definitions.length} 个采样点`;if(!state.definitions.length){$('definition-table').innerHTML='<div class="empty">暂无采样定义，请先新建。</div>';return}$('definition-table').innerHTML=`<table class='data-table'><thead><tr><th>采样点</th><th>源数据库 / 源表</th><th>字段</th><th>周期</th><th>状态</th><th>操作</th></tr></thead><tbody>${state.definitions.map(d=>`<tr><td><b>${esc(d.samp_name)}</b></td><td><div class='code'>${esc(d.source_database)}</div><div>${esc(d.source_table)}</div></td><td>${d.fields.map(esc).join(', ')}</td><td>${d.interval_seconds?d.interval_seconds+' 秒':'手动'}</td><td><span class='badge ${d.enabled?'on':'off'}'>${d.enabled?'运行中':'已停用'}</span></td><td><div class='actions'><button class='btn small' data-action='edit' data-id='${d.id}'>编辑</button><button class='btn small' data-action='sample' data-id='${d.id}'>立即采样</button><button class='btn small' data-action='toggle' data-id='${d.id}'>${d.enabled?'停用':'启用'}</button><button class='btn small danger' data-action='delete' data-id='${d.id}'>删除</button></div></td></tr>`).join('')}</tbody></table>`}
 async function loadDefinitions(){try{state.definitions=await api('/api/definitions');renderDefinitions();renderQueryDefinitions();renderRuntime();}catch(error){toast(error.message,true)}}

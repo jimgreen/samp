@@ -1,7 +1,7 @@
 """Standalone automatic sampler process.
 
-Run with ``python -m samp.sampler --db data/samp_define.db`` when the Web
-process is not used. The same Store and yearly result layout are used.
+Run with ``python -m samp.sampler`` when the Web process is not used. The
+same Store and yearly result layout are used.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import time
 
-from .store import Store
+from .store import SQLITE_DIR, Store
 
 
 def run(db: str, source_db: str, result_dir: str, once: bool = False) -> None:
@@ -27,9 +27,9 @@ def run(db: str, source_db: str, result_dir: str, once: bool = False) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SAMP automatic sampler")
-    parser.add_argument("--db", default="data/samp_define.db")
-    parser.add_argument("--source-db", default="data/source.db")
-    parser.add_argument("--result-dir", default="data/results")
+    parser.add_argument("--db", default=str(SQLITE_DIR / "samp_define.db"))
+    parser.add_argument("--source-db", default=str(SQLITE_DIR / "source.db"))
+    parser.add_argument("--result-dir", default=str(SQLITE_DIR))
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     run(args.db, args.source_db, args.result_dir, args.once)

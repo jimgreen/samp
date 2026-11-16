@@ -2,10 +2,12 @@ import argparse
 
 import uvicorn
 
+from .store import SQLITE_DIR
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run SAMP web service")
-    parser.add_argument("--db", default="data/samp.db", help="SQLite database path")
+    parser.add_argument("--db", default=str(SQLITE_DIR / "samp_define.db"), help="采样定义 SQLite 数据库路径")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
