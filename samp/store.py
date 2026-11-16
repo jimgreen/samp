@@ -241,10 +241,12 @@ class Store:
     def status(self) -> dict[str, Any]:
         with self._connect(self.definition_db) as conn:
             definitions, enabled = conn.execute("SELECT COUNT(*),COALESCE(SUM(enabled),0) FROM samp_define").fetchone()
+        definition_name = Path(self.definition_db).name
+        result_databases = sum(1 for path in self.result_dir.glob("*.db") if path.name != definition_name)
         return {
             "definitions": definitions,
             "enabled": enabled,
-            "result_databases": len(list(self.result_dir.glob("*.db"))),
+            "result_databases": result_databases,
             "items": [self.runtime_status(item["id"]) for item in self.list_definitions()],
         }
 
