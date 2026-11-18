@@ -108,6 +108,7 @@ def test_web_api_definition_sample_and_query_flow(tmp_path):
         query = client.get(f"/api/query/{definition['id']}", params={"start": sampled["sampled_at"] - 1, "end": sampled["sampled_at"] + 1, "fields": "voltage"})
         assert query.status_code == 200
         assert query.json()["rows"][0]["voltage"] == 220.5
+        assert client.get("/api/health").json()["result_databases"] == 1
         assert client.get(f"/api/query/{definition['id']}", params={"start": 0, "end": 1, "fields": "missing"}).status_code == 400
 
 

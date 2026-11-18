@@ -279,8 +279,9 @@ class Store:
             conn.execute(f"CREATE TABLE IF NOT EXISTS {self._quote(table)} ({col_sql}, PRIMARY KEY(sample_time,row_key))")
             columns = ["sample_time", "row_key", *fields]
             placeholders = ",".join("?" for _ in columns)
-            for key, values in rows:
-                conn.execute(f"INSERT OR REPLACE INTO {self._quote(table)} ({', '.join(self._quote(c) for c in columns)}) VALUES ({placeholders})", [sampled_at, key, *[values.get(field) for field in fields]])
+            values = [[sampled_at, key, *[row_values.get(field) for field in fields]] for key, row_values in rows]
+            if values:
+                conn.executemany(f"INSERT OR REPLACE INTO {self._quote(table)} ({', '.join(self._quote(c) for c in columns)}) VALUES ({placeholders})", values)
         return {"samp_id": samp_id, "sampled_at": sampled_at, "rows_written": len(rows), "database": str(db_path), "table": table}
 
     def query_samples(self, samp_id: int, start: int, end: int, fields: list[str] | None = None, limit: int = 1000, offset: int = 0) -> dict[str, Any]:
@@ -323,15 +324,17 @@ class Store:
         rows.sort(key=lambda row: (row["sample_time"], row["row_key"]))
         return {"definition": definition, "columns": ["sample_time", "row_key", *selected], "rows": rows, "tables": tables, "total_rows": total_rows, "limit": limit, "offset": requested_offset}
 
-    def status(self) -> dict[str, Any]:
+    def summary(self) -> dict[str, int]:
         with self._connect(self.definition_db) as conn:
             definitions, enabled = conn.execute("SELECT COUNT(*),COALESCE(SUM(enabled),0) FROM samp_define").fetchone()
         definition_name = Path(self.definition_db).name
         result_databases = sum(1 for path in self.result_dir.glob("samp_*.db") if path.name != definition_name)
+        return {"definitions": definitions, "enabled": enabled, "result_databases": result_databases}
+
+    def status(self) -> dict[str, Any]:
+        summary = self.summary()
         return {
-            "definitions": definitions,
-            "enabled": enabled,
-            "result_databases": result_databases,
+            **summary,
             "items": [self.runtime_status(item["id"]) for item in self.list_definitions()],
         }
 
