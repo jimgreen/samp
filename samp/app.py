@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 import time
 from contextlib import asynccontextmanager
@@ -8,10 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from .store import SQLITE_DIR, Store
+
+LOGGER = logging.getLogger("samp")
 
 
 class DefinitionIn(BaseModel):
@@ -33,20 +36,42 @@ class SourceRowsIn(BaseModel):
 def create_app(definition_db: str | Path = SQLITE_DIR / "samp_define.db", source_db: str | Path = SQLITE_DIR / "source.db", result_dir: str | Path = SQLITE_DIR) -> FastAPI:
     store = Store(definition_db, source_db, result_dir)
     stop = asyncio.Event()
+    last_attempt: dict[int, int] = {}
+    running: set[int] = set()
 
     async def sampler_loop() -> None:
         while not stop.is_set():
             now = int(time.time())
-            for item in store.list_definitions():
+            definitions = store.list_definitions()
+            active_ids = set()
+            due = []
+            for item in definitions:
+                active_ids.add(item["id"])
                 if not item.get("enabled") or item["interval_seconds"] <= 0:
+                    last_attempt.pop(item["id"], None)
                     continue
-                if now % item["interval_seconds"] == 0:
-                    try:
-                        store.run_sample(item["id"], now)
-                    except Exception:
-                        pass
+                if item["id"] in running:
+                    continue
+                previous = last_attempt.get(item["id"])
+                if previous is None or now - previous >= item["interval_seconds"]:
+                    last_attempt[item["id"]] = now
+                    due.append(item["id"])
+            for samp_id in set(last_attempt) - active_ids:
+                last_attempt.pop(samp_id, None)
+            if due:
+                running.update(due)
+                try:
+                    results = await asyncio.gather(
+                        *(asyncio.to_thread(store.run_sample, samp_id, now) for samp_id in due),
+                        return_exceptions=True,
+                    )
+                    for samp_id, result in zip(due, results):
+                        if isinstance(result, Exception):
+                            LOGGER.warning("自动采样失败 samp_id=%s: %s", samp_id, result)
+                finally:
+                    running.difference_update(due)
             try:
-                await asyncio.wait_for(stop.wait(), timeout=1)
+                await asyncio.wait_for(stop.wait(), timeout=0.5)
             except asyncio.TimeoutError:
                 pass
 
@@ -99,16 +124,21 @@ def create_app(definition_db: str | Path = SQLITE_DIR / "samp_define.db", source
         except KeyError as exc: raise HTTPException(404, str(exc))
 
     @app.get("/api/query/{samp_id}")
-    def query(samp_id: int, start: int = Query(...), end: int = Query(...), fields: str = ""):
+    def query(samp_id: int, start: int = Query(...), end: int = Query(...), fields: str = "", limit: int = Query(1000, ge=1, le=10000), offset: int = Query(0, ge=0)):
         if end < start: raise HTTPException(400, "end 不能早于 start")
-        try: return store.query_samples(samp_id, start, end, [x for x in fields.split(",") if x] or None)
+        try: return store.query_samples(samp_id, start, end, [x for x in fields.split(",") if x] or None, limit, offset)
         except KeyError as exc: raise HTTPException(404, str(exc))
+        except ValueError as exc: raise HTTPException(400, str(exc))
 
     @app.get("/api/source/tables")
-    def source_tables(source_database: str | None = None): return {"tables": store.source_tables(source_database)}
+    def source_tables(source_database: str | None = None):
+        try: return {"tables": store.source_tables(source_database)}
+        except sqlite3.Error as exc: raise HTTPException(400, str(exc))
 
     @app.get("/api/source/{source_table}/fields")
-    def source_fields(source_table: str, source_database: str | None = None): return {"fields": store.source_fields(source_database, source_table)}
+    def source_fields(source_table: str, source_database: str | None = None):
+        try: return {"fields": store.source_fields(source_database, source_table)}
+        except (ValueError, sqlite3.Error) as exc: raise HTTPException(400, str(exc))
 
     @app.get("/api/source/inspect")
     def source_inspect(source_database: str, source_table: str, limit: int = 20):
@@ -116,13 +146,22 @@ def create_app(definition_db: str | Path = SQLITE_DIR / "samp_define.db", source
         except (ValueError, sqlite3.Error) as exc: raise HTTPException(400, str(exc))
 
     @app.post("/api/source/rows")
-    def source_rows(payload: SourceRowsIn): return {"written": store.replace_source_rows(payload.source_table, payload.rows, payload.source_database)}
+    def source_rows(payload: SourceRowsIn):
+        try: return {"written": store.replace_source_rows(payload.source_table, payload.rows, payload.source_database)}
+        except (ValueError, sqlite3.Error) as exc: raise HTTPException(400, str(exc))
 
     @app.get("/api/status")
     def status(): return store.status()
 
+    @app.get("/api/health")
+    def health():
+        return {"status": "ok", "service": "samp", "definitions": store.status()["definitions"]}
+
     @app.get("/", response_class=HTMLResponse)
     def home(): return HTML
+
+    @app.get("/favicon.ico")
+    def favicon(): return Response(status_code=204)
 
     return app
 
@@ -163,18 +202,19 @@ HTML = """<!doctype html>
 </section>
 <section id='view-query' class='view'>
   <div class='toolbar'><h2>采样结果查询</h2><button id='refresh-query' class='btn'>刷新定义</button></div>
-  <div class='card'><div class='query-options'><div class='field'><label>采样点</label><select id='query-definition'></select></div><div class='field'><label>开始时间</label><input id='query-start' type='datetime-local'></div><div class='field'><label>结束时间</label><input id='query-end' type='datetime-local'></div><button id='run-query' class='btn primary'>查询</button><button id='export-query' class='btn'>导出 CSV</button></div><div class='field'><label>查询字段</label><div id='query-fields' class='field-list'></div></div><div id='query-message' class='muted'>请选择采样点和时间范围。</div></div>
-  <div class='card' style='margin-top:18px'><div id='query-table' class='table-wrap'></div><div id='query-chart' class='chart'></div></div>
+  <div class='card'><div class='query-options'><div class='field'><label>采样点</label><select id='query-definition'></select></div><div class='field'><label>开始时间</label><input id='query-start' type='datetime-local'></div><div class='field'><label>结束时间</label><input id='query-end' type='datetime-local'></div><button id='run-query' class='btn primary'>查询</button><button id='export-query' class='btn'>导出当前页</button></div><div class='actions'><button id='query-last-hour' class='btn small'>最近 1 小时</button><button id='query-today' class='btn small'>今天</button><button id='query-last-day' class='btn small'>最近 24 小时</button></div><div class='field'><label>查询字段</label><div id='query-fields' class='field-list'></div></div><div id='query-message' class='muted'>请选择采样点和时间范围。</div></div>
+  <div class='card' style='margin-top:18px'><div id='query-table' class='table-wrap'></div><div class='actions'><button id='query-prev' class='btn small'>上一页</button><span id='query-page-info' class='muted'>未查询</span><button id='query-next' class='btn small'>下一页</button></div><div id='query-chart' class='chart'></div></div>
 </section>
 </main><div id='toast' class='toast'></div>
 <script>
-const state={definitions:[],source:null,lastQuery:null};
+const state={definitions:[],source:null,lastQuery:null,queryPage:0,queryLimit:500,queryRequest:null,formEditing:false};
 const $=id=>document.getElementById(id);const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(url,options={}){const response=await fetch(url,options);let body={};try{body=await response.json()}catch{}if(!response.ok)throw new Error(body.detail||`请求失败（${response.status}）`);return body}
 function toast(message,error=false){const node=$('toast');node.textContent=message;node.style.background=error?'#a3271a':'#17345f';node.classList.add('show');setTimeout(()=>node.classList.remove('show'),3200)}
 function localDate(value){const date=new Date(value*1000);const pad=n=>String(n).padStart(2,'0');return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`}
 function timestamp(value){return Math.floor(new Date(value).getTime()/1000)}
 function setDefaultQueryTimes(){const now=Math.floor(Date.now()/1000);$('query-start').value=localDate(now-3600);$('query-end').value=localDate(now)}
+function setQueryRange(kind){const now=Math.floor(Date.now()/1000),start=new Date();if(kind==='hour'){$('query-start').value=localDate(now-3600);$('query-end').value=localDate(now);return}if(kind==='day'){$('query-start').value=localDate(now-86400);$('query-end').value=localDate(now);return}start.setHours(0,0,0,0);$('query-start').value=localDate(Math.floor(start.getTime()/1000));$('query-end').value=localDate(now)}
 function renderFieldChecks(container,fields,checked){fields=fields.filter(field=>field!=='row_key');container.innerHTML=fields.length?fields.map(field=>`<label class='field-check'><input type='checkbox' value='${esc(field)}' ${checked.includes(field)?'checked':''}>${esc(field)}</label>`).join(''):'<span class="muted">没有可用字段</span>'}
 function checkedFields(container){return [...container.querySelectorAll('input[type=checkbox]:checked')].map(input=>input.value)}
 function renderPreview(data){$('source-meta').innerHTML=`<span class='code'>${esc(data.source_database)} : ${esc(data.source_table)}</span> · ${data.fields.length} 个字段 · 显示 ${data.rows.length} 行`;if(!data.rows.length){$('source-preview').innerHTML='<div class="empty">源表没有数据</div>';return}const cols=data.fields;$('source-preview').innerHTML=`<table class='data-table'><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${data.rows.map(row=>`<tr>${cols.map(c=>`<td>${esc(row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`}
@@ -184,18 +224,21 @@ function resetForm(){ $('definition-id').value='';$('form-title').textContent='�
 function editDefinition(def){$('definition-id').value=def.id;$('form-title').textContent=`编辑采样定义：${def.samp_name}`;$('name').value=def.samp_name;$('source-database').value=def.source_database;$('source-table').value=def.source_table;$('interval').value=def.interval_seconds;$('filter').value=def.filter||'';$('enabled').checked=!!def.enabled;inspectSource().then(()=>renderFieldChecks($('definition-fields'),state.source?.fields||[],def.fields));window.scrollTo({top:0,behavior:'smooth'})}
 function renderDefinitions(){ $('definition-count').textContent=`共 ${state.definitions.length} 个采样点`;if(!state.definitions.length){$('definition-table').innerHTML='<div class="empty">暂无采样定义，请先新建。</div>';return}$('definition-table').innerHTML=`<table class='data-table'><thead><tr><th>采样点</th><th>源数据库 / 源表</th><th>字段</th><th>周期</th><th>状态</th><th>操作</th></tr></thead><tbody>${state.definitions.map(d=>`<tr><td><b>${esc(d.samp_name)}</b></td><td><div class='code'>${esc(d.source_database)}</div><div>${esc(d.source_table)}</div></td><td>${d.fields.map(esc).join(', ')}</td><td>${d.interval_seconds?d.interval_seconds+' 秒':'手动'}</td><td><span class='badge ${d.enabled?'on':'off'}'>${d.enabled?'运行中':'已停用'}</span></td><td><div class='actions'><button class='btn small' data-action='edit' data-id='${d.id}'>编辑</button><button class='btn small' data-action='sample' data-id='${d.id}'>立即采样</button><button class='btn small' data-action='toggle' data-id='${d.id}'>${d.enabled?'停用':'启用'}</button><button class='btn small danger' data-action='delete' data-id='${d.id}'>删除</button></div></td></tr>`).join('')}</tbody></table>`}
 async function loadDefinitions(){try{state.definitions=await api('/api/definitions');renderDefinitions();renderQueryDefinitions();renderRuntime();}catch(error){toast(error.message,true)}}
-function renderQueryDefinitions(){const current=$('query-definition').value;$('query-definition').innerHTML=state.definitions.map(d=>`<option value='${d.id}'>${esc(d.samp_name)}</option>`).join('');const selected=state.definitions.find(d=>String(d.id)===String(current))||state.definitions[0];if(selected){$('query-definition').value=selected.id;renderFieldChecks($('query-fields'),selected.fields,selected.fields)}else{$('query-fields').innerHTML='<span class="muted">暂无采样定义</span>'}}
+function renderQueryDefinitions(){const current=$('query-definition').value;const currentFields=checkedFields($('query-fields'));$('query-definition').innerHTML=state.definitions.map(d=>`<option value='${d.id}'>${esc(d.samp_name)}</option>`).join('');const selected=state.definitions.find(d=>String(d.id)===String(current))||state.definitions[0];if(selected){$('query-definition').value=selected.id;const checked=String(selected.id)===String(current)&&currentFields.length?currentFields:selected.fields;renderFieldChecks($('query-fields'),selected.fields,checked)}else{$('query-fields').innerHTML='<span class="muted">暂无采样定义</span>'}}
 function renderRuntime(){const enabled=state.definitions.filter(d=>d.enabled).length;$('runtime-metrics').innerHTML=`<div class='metric'><b>${state.definitions.length}</b><span>采样定义</span></div><div class='metric'><b>${enabled}</b><span>已启用</span></div><div class='metric'><b>${state.definitions.filter(d=>d.interval_seconds>0&&d.enabled).length}</b><span>自动采样</span></div>`;if(!state.definitions.length){$('runtime-table').innerHTML='<div class="empty">暂无运行对象</div>';return}$('runtime-table').innerHTML=`<table class='data-table'><thead><tr><th>采样点</th><th>状态</th><th>周期</th><th>源表</th><th>结果年份</th><th>最近结果</th><th>操作</th></tr></thead><tbody>${state.definitions.map(d=>`<tr id='runtime-${d.id}'><td>${esc(d.samp_name)}</td><td>${d.enabled?'<span class="badge on">启用</span>':'<span class="badge off">停用</span>'}</td><td>${d.interval_seconds?d.interval_seconds+' 秒':'手动'}</td><td>${esc(d.source_table)}</td><td class='runtime-years'>读取中</td><td class='runtime-last'>读取中</td><td><button class='btn small' data-action='runtime-sample' data-id='${d.id}'>立即采样</button></td></tr>`).join('')}</tbody></table>`;state.definitions.forEach(loadRuntimeRow)}
 async function loadRuntimeRow(def){try{const data=await api(`/api/definitions/${def.id}/runtime`),row=$(`runtime-${def.id}`);if(!row)return;row.querySelector('.runtime-years').textContent=data.result_years.length?data.result_years.join(', '):'暂无';row.querySelector('.runtime-last').textContent=data.last_result_at?new Date(data.last_result_at*1000).toLocaleString():'暂无'}catch(error){}}
 async function saveDefinition(event){event.preventDefault();const fields=checkedFields($('definition-fields'));if(!fields.length){toast('至少选择一个采样字段',true);return}const payload={name:$('name').value.trim(),source_database:$('source-database').value.trim(),source_table:$('source-table').value.trim(),fields,interval_seconds:Number($('interval').value),filter:$('filter').value.trim(),enabled:$('enabled').checked};const id=$('definition-id').value;try{await api(id?`/api/definitions/${id}`:'/api/definitions',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast(id?'采样定义已更新':'采样定义已创建');resetForm();await loadDefinitions()}catch(error){toast(error.message,true)}}
 async function deleteDefinition(id){const def=state.definitions.find(item=>item.id===id);if(!def||!confirm(`确认删除采样点“${def.samp_name}”吗？`))return;try{await api(`/api/definitions/${id}`,{method:'DELETE'});toast('采样定义已删除');await loadDefinitions()}catch(error){toast(error.message,true)}}
 async function toggleDefinition(id){const def=state.definitions.find(item=>item.id===id);if(!def)return;try{await api(`/api/definitions/${id}/enable?enabled=${!def.enabled}`,{method:'POST'});toast(def.enabled?'采样已停用':'采样已启用');await loadDefinitions()}catch(error){toast(error.message,true)}}
 async function sampleNow(id){try{const result=await api(`/api/sample/${id}`,{method:'POST'});toast(`采样完成，写入 ${result.rows_written} 行`);await loadDefinitions()}catch(error){toast(error.message,true)}}
-function renderQueryTable(result){if(!result.rows.length){$('query-table').innerHTML='<div class="empty">时间范围内没有采样数据。</div>';$('query-chart').innerHTML='<div class="empty">暂无曲线数据</div>';return}const cols=result.columns;$('query-table').innerHTML=`<table class='data-table'><thead><tr>${cols.map(c=>`<th>${esc(c==='sample_time'?'采样时间':c)}</th>`).join('')}</tr></thead><tbody>${result.rows.map(row=>`<tr>${cols.map(c=>`<td>${esc(c==='sample_time'?new Date(row[c]*1000).toLocaleString():row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;const fields=cols.filter(c=>!['sample_time','row_key'].includes(c));const maxima=fields.map(field=>field+': '+Math.max(...result.rows.map(row=>Number(row[field])||0))).join('；');$('query-chart').textContent='字段最大值：'+(maxima||'没有数值字段可绘制。')}
-async function runQuery(){const id=$('query-definition').value;if(!id){toast('请先创建采样定义',true);return}const start=timestamp($('query-start').value),end=timestamp($('query-end').value);if(!Number.isFinite(start)||!Number.isFinite(end)||end<start){toast('请检查查询时间范围',true);return}try{const fields=checkedFields($('query-fields'));const result=await api(`/api/query/${id}?start=${start}&end=${end}&fields=${encodeURIComponent(fields.join(','))}`);state.lastQuery=result;renderQueryTable(result);$('query-message').textContent=`查询到 ${result.rows.length} 行，结果表：${result.tables.join(', ')||'暂无'}`}catch(error){toast(error.message,true)}}
+function renderQueryTable(result){const cols=result.columns||[];if(!result.rows.length){$('query-table').innerHTML='<div class="empty">时间范围内没有采样数据。</div>';$('query-chart').innerHTML='<div class="empty">暂无曲线数据</div>';renderQueryPager(result);return}$('query-table').innerHTML=`<table class='data-table'><thead><tr>${cols.map(c=>`<th>${esc(c==='sample_time'?'采样时间':c)}</th>`).join('')}</tr></thead><tbody>${result.rows.map(row=>`<tr>${cols.map(c=>`<td>${esc(c==='sample_time'?new Date(row[c]*1000).toLocaleString():row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;const fields=cols.filter(c=>!['sample_time','row_key'].includes(c));const maxima=fields.map(field=>field+': '+Math.max(...result.rows.map(row=>Number(row[field])||0))).join('；');$('query-chart').textContent='字段最大值：'+(maxima||'没有数值字段可绘制。');renderQueryPager(result)}
+function renderQueryPager(result){const total=Number(result.total_rows||0),offset=Number(result.offset||0),limit=Number(result.limit||state.queryLimit),page=total?Math.floor(offset/limit)+1:0,pages=total?Math.ceil(total/limit):0;$('query-page-info').textContent=total?`第 ${page} / ${pages} 页（${offset+1}-${Math.min(offset+(result.rows||[]).length,total)}，共 ${total} 行）`:'暂无数据';$('query-prev').disabled=page<=1;$('query-next').disabled=!total||page>=pages}
+function queryRequestFromForm(){const id=$('query-definition').value;if(!id){toast('请先创建采样定义',true);return null}const start=timestamp($('query-start').value),end=timestamp($('query-end').value);if(!Number.isFinite(start)||!Number.isFinite(end)||end<start){toast('请检查查询时间范围',true);return null}const fields=checkedFields($('query-fields'));if(!fields.length){toast('至少选择一个查询字段',true);return null}return {id,start,end,fields}}
+async function runQuery(page=0,useSavedRequest=false){const request=useSavedRequest?state.queryRequest:queryRequestFromForm();if(!request)return;state.queryPage=Math.max(0,page);if(!useSavedRequest)state.queryRequest=request;try{const result=await api(`/api/query/${request.id}?start=${request.start}&end=${request.end}&fields=${encodeURIComponent(request.fields.join(','))}&limit=${state.queryLimit}&offset=${state.queryPage*state.queryLimit}`);if(result.total_rows&&result.offset>=result.total_rows){const lastPage=Math.max(0,Math.ceil(result.total_rows/state.queryLimit)-1);if(lastPage!==state.queryPage){return runQuery(lastPage,true)}}state.lastQuery=result;renderQueryTable(result);$('query-message').textContent=`查询到 ${result.total_rows} 行，当前显示 ${result.rows.length} 行；结果表：${result.tables.join(', ')||'暂无'}`}catch(error){toast(error.message,true)}}
 function exportQuery(){const result=state.lastQuery;if(!result?.rows?.length){toast('没有可导出的查询数据',true);return}const csv=[result.columns,...result.rows.map(row=>result.columns.map(col=>row[col]))].map(row=>row.map(value=>`"${String(value??'').replaceAll('"','""')}"`).join(',')).join('\\n');const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([`\\ufeff${csv}`],{type:'text/csv;charset=utf-8'}));link.download=`${result.definition.samp_name}_采样结果.csv`;link.click();URL.revokeObjectURL(link.href)}
 document.querySelectorAll('.nav button').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('.nav button').forEach(item=>item.classList.remove('active'));document.querySelectorAll('.view').forEach(item=>item.classList.remove('active'));button.classList.add('active');$(`view-${button.dataset.view}`).classList.add('active');if(button.dataset.view==='runtime')renderRuntime()}));
-$('definition-form').addEventListener('submit',saveDefinition);$('inspect-source').addEventListener('click',inspectSource);$('load-tables').addEventListener('click',loadTables);$('new-definition').addEventListener('click',resetForm);$('cancel-edit').addEventListener('click',resetForm);$('refresh-definitions').addEventListener('click',loadDefinitions);$('refresh-runtime').addEventListener('click',loadDefinitions);$('refresh-query').addEventListener('click',loadDefinitions);$('run-query').addEventListener('click',runQuery);$('export-query').addEventListener('click',exportQuery);$('query-definition').addEventListener('change',()=>{const def=state.definitions.find(item=>String(item.id)===$('query-definition').value);if(def)renderFieldChecks($('query-fields'),def.fields,def.fields)});$('definition-table').addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(!button)return;const id=Number(button.dataset.id);if(button.dataset.action==='edit')editDefinition(state.definitions.find(item=>item.id===id));if(button.dataset.action==='delete')deleteDefinition(id);if(button.dataset.action==='toggle')toggleDefinition(id);if(button.dataset.action==='sample')sampleNow(id)});$('runtime-table').addEventListener('click',event=>{const button=event.target.closest('[data-action="runtime-sample"]');if(button)sampleNow(Number(button.dataset.id))});
+$('definition-form').addEventListener('submit',saveDefinition);$('inspect-source').addEventListener('click',inspectSource);$('load-tables').addEventListener('click',loadTables);$('new-definition').addEventListener('click',resetForm);$('cancel-edit').addEventListener('click',resetForm);$('refresh-definitions').addEventListener('click',loadDefinitions);$('refresh-runtime').addEventListener('click',loadDefinitions);$('refresh-query').addEventListener('click',loadDefinitions);$('run-query').addEventListener('click',runQuery);$('export-query').addEventListener('click',exportQuery);$('definition-table').addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(!button)return;const id=Number(button.dataset.id);if(button.dataset.action==='edit')editDefinition(state.definitions.find(item=>item.id===id));if(button.dataset.action==='delete')deleteDefinition(id);if(button.dataset.action==='toggle')toggleDefinition(id);if(button.dataset.action==='sample')sampleNow(id)});$('runtime-table').addEventListener('click',event=>{const button=event.target.closest('[data-action="runtime-sample"]');if(button)sampleNow(Number(button.dataset.id))});
+$('query-prev').addEventListener('click',()=>{if(state.queryPage>0)runQuery(state.queryPage-1,true)});$('query-next').addEventListener('click',()=>{if(state.lastQuery&&state.lastQuery.offset+state.lastQuery.rows.length<state.lastQuery.total_rows)runQuery(state.queryPage+1,true)});$('query-last-hour').addEventListener('click',()=>{setQueryRange('hour');runQuery()});$('query-last-day').addEventListener('click',()=>{setQueryRange('day');runQuery()});$('query-today').addEventListener('click',()=>{setQueryRange('today');runQuery()});$('query-definition').addEventListener('change',()=>{state.queryPage=0;state.queryRequest=null;const def=state.definitions.find(item=>String(item.id)===$('query-definition').value);if(def)renderFieldChecks($('query-fields'),def.fields,def.fields)});$('query-fields').addEventListener('change',()=>{state.queryPage=0});
 setDefaultQueryTimes();loadDefinitions();setInterval(loadDefinitions,15000);
 </script></body></html>"""
 

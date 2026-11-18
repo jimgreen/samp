@@ -12,7 +12,7 @@
 python -m samp
 ```
 
-浏览器打开 <http://127.0.0.1:8000>。也可以使用 `uvicorn samp.app:app --reload`。
+浏览器打开 <http://127.0.0.1:8877>。也可以使用 `uvicorn samp.app:app --host 127.0.0.1 --port 8877 --reload`。
 
 默认 SQLite 根目录为 `D:\codex\sqldb\realtime\samp`，也可以通过环境变量 `SAMP_SQLITE_DIR` 修改。采样定义库为该目录下的 `samp_define.db`，默认源库为 `source.db`，结果库直接写入同一目录。源数据表由采样定义中的 `source_database` 和 `source_table` 指定，采样程序通过 SQLite 元数据动态读取，不依赖固定表名。示例导入接口：
 
@@ -23,5 +23,9 @@ INSERT INTO meter(row_key, voltage, current) VALUES ('A01', 220.1, 3.2);
 
 也可以调用 `POST /api/source/rows`，同时传入 `source_database`、`source_table` 和行数据。
 
+查询页面内置最近 1 小时、今天、最近 24 小时快捷范围，结果按 500 行分页显示并支持当前页 CSV 导出。API 查询支持 `limit`（1-10000）和 `offset` 分页参数，并返回 `total_rows`。
+
 详情见 `samp/schema.sql` 和 API 文档 `/docs`。
+
+完整功能说明见 [`docs/samp功能说明.html`](docs/samp功能说明.html)。
 

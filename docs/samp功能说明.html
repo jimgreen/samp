@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SAMP 采样功能说明</title>
+  <style>
+    :root{--ink:#1f2937;--muted:#64748b;--blue:#1769e0;--navy:#14233e;--line:#dbe4f0;--soft:#f4f7fb;--green:#16834b;--amber:#9a6700}
+    *{box-sizing:border-box}body{margin:0;color:var(--ink);background:var(--soft);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+    header{background:linear-gradient(120deg,#14233e,#1e63bd);color:#fff;padding:48px max(24px,calc((100% - 1120px)/2)) 42px}header h1{margin:0 0 8px;font-size:32px;letter-spacing:.02em}header p{margin:0;color:#d9e8ff;font-size:16px}
+    .layout{display:grid;grid-template-columns:240px minmax(0,1fr);gap:28px;max-width:1120px;margin:28px auto;padding:0 24px}.toc{position:sticky;top:18px;align-self:start;background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px}.toc b{display:block;margin-bottom:8px}.toc a{display:block;padding:5px 8px;color:#31547f;text-decoration:none;border-radius:6px}.toc a:hover{background:#edf4ff;color:var(--blue)}main{min-width:0}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:26px 30px;margin-bottom:18px;box-shadow:0 4px 18px #223b5b0b}h2{margin:0 0 14px;color:var(--navy);font-size:23px;border-bottom:1px solid var(--line);padding-bottom:8px}h3{margin:22px 0 8px;color:#234c82;font-size:18px}p{margin:8px 0}ul,ol{padding-left:24px}.lead{font-size:17px}.note{background:#eef6ff;border-left:4px solid var(--blue);padding:10px 14px;margin:14px 0}.warn{background:#fff8e6;border-left:4px solid #d99a17;padding:10px 14px;margin:14px 0}code{font-family:Consolas,"Courier New",monospace;background:#eef2f7;border-radius:4px;padding:1px 5px;color:#263f62}pre{overflow:auto;background:#17243a;color:#e5eefc;border-radius:8px;padding:15px 18px;line-height:1.55}table{width:100%;border-collapse:collapse;margin:10px 0 4px}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}th{background:#edf3fb;color:#284d7c}.tag{display:inline-block;border-radius:99px;padding:1px 9px;font-size:12px;background:#e8f7ef;color:var(--green)}.tag.manual{background:#fff4d7;color:var(--amber)}.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 0}.flow div{background:#f5f8fc;border:1px solid var(--line);border-radius:8px;padding:12px;text-align:center}.flow strong{display:block;color:var(--blue);margin-bottom:4px}.api td:first-child{white-space:nowrap;font-family:Consolas,monospace;color:#134d9c}.footer{text-align:center;color:var(--muted);padding:8px 24px 35px}@media(max-width:800px){.layout{display:block}.toc{position:static;margin-bottom:18px}.flow{grid-template-columns:1fr 1fr}.card{padding:20px}}@media(max-width:460px){.flow{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<header><h1>SAMP 采样功能说明</h1><p>采样定义、自动采样、结果查询与 SQLite 数据组织说明</p></header>
+<div class="layout">
+  <nav class="toc"><b>目录</b><a href="#overview">1. 功能概览</a><a href="#storage">2. 数据存储</a><a href="#definition">3. 采样定义</a><a href="#automatic">4. 自动采样</a><a href="#query">5. 采样查询</a><a href="#api">6. API 接口</a><a href="#start">7. 启动与运维</a><a href="#trouble">8. 常见问题</a></nav>
+  <main>
+    <section id="overview" class="card">
+      <h2>1. 功能概览</h2>
+      <p class="lead">SAMP 用采样定义描述“从哪个 SQLite 数据库的哪张表读取哪些字段、按什么周期保存”，后台按定义执行采样，并提供 Web 查询和 CSV 导出。</p>
+      <div class="flow"><div><strong>① 定义</strong>选择源库、源表、字段和周期</div><div><strong>② 读取</strong>按定义访问真实源表</div><div><strong>③ 保存</strong>写入采样点年度结果库</div><div><strong>④ 查询</strong>按时间和字段查看结果</div></div>
+      <ul><li>Web 页面包含采样定义、运行监控、采样查询三个区域。</li><li>源表由采样定义指定，程序不依赖固定的 <code>source_rows</code> 表。</li><li>页面和接口不暴露旧版 EMS 的 <code>app</code>、<code>ctx</code> 维度。</li><li>采样点名、源表名和字段名支持字母、数字、下划线及中文。</li></ul>
+    </section>
+
+    <section id="storage" class="card">
+      <h2>2. 数据存储</h2>
+      <p>默认 SQLite 根目录为：</p><pre>D:\codex\sqldb\realtime\samp</pre>
+      <table><thead><tr><th>文件</th><th>用途</th><th>结构</th></tr></thead><tbody>
+        <tr><td><code>samp_define.db</code></td><td>采样定义</td><td>只有一张 <code>samp_define</code> 表</td></tr>
+        <tr><td><code>samp_采样点名_年份.db</code></td><td>采样结果</td><td>每个库只有一张同名表，例如 <code>samp_电表A_2026</code></td></tr>
+        <tr><td>用户指定的源库</td><td>实时源数据</td><td>由定义中的 <code>source_database</code> 和 <code>source_table</code> 决定</td></tr>
+      </tbody></table>
+      <div class="note">结果库直接放在 SQLite 根目录。查询跨年度时，服务会按涉及的年份读取多个结果库并合并排序。</div>
+      <h3>定义表主要字段</h3>
+      <table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody>
+        <tr><td><code>samp_name</code></td><td>采样点名，唯一，同时参与结果库和结果表命名。</td></tr>
+        <tr><td><code>source_database</code></td><td>源 SQLite 文件的绝对或相对路径。</td></tr>
+        <tr><td><code>source_table</code></td><td>源数据库中的真实表名。</td></tr>
+        <tr><td><code>field_name</code></td><td>逗号分隔的采样字段列表。</td></tr>
+        <tr><td><code>samp_time</code></td><td>采样周期，单位为秒；0 表示只手动采样。</td></tr>
+        <tr><td><code>filter_value</code></td><td>可选过滤条件，如 <code>status=1 and quality=0</code>。</td></tr>
+        <tr><td><code>enabled</code></td><td>是否启用自动采样。</td></tr>
+      </tbody></table>
+    </section>
+
+    <section id="definition" class="card">
+      <h2>3. 采样定义</h2>
+      <ol><li>打开 Web 首页，进入“采样定义”。</li><li>填写采样点名和源数据库路径。</li><li>点击“读取表”，或直接填写源表名。</li><li>点击“读取字段和预览”，确认源表结构和数据。</li><li>选择要采样的业务字段，设置周期和过滤条件。</li><li>点击“保存定义”。</li></ol>
+      <h3>定义页可执行操作</h3>
+      <table><thead><tr><th>操作</th><th>行为</th></tr></thead><tbody><tr><td>新建</td><td>创建新的采样定义。</td></tr><tr><td>编辑</td><td>重新读取源表后修改字段、周期、过滤条件或启停状态。</td></tr><tr><td>立即采样</td><td>绕过周期立即读取一次源表并写入结果库。</td></tr><tr><td>启用/停用</td><td>控制后台自动采样；停用不删除历史结果。</td></tr><tr><td>删除</td><td>删除定义记录，不自动删除已有结果库。</td></tr></tbody></table>
+      <div class="warn">源表必须已经存在，选择的字段也必须属于该表。内部行标识字段 <code>row_key</code> 用于保存结果行定位，不作为页面业务采样字段。</div>
+    </section>
+
+    <section id="automatic" class="card">
+      <h2>4. 自动采样</h2>
+      <p>Web 服务启动后会运行后台采样循环。循环每秒检查启用的采样定义，周期大于 0 且到达触发时间时执行一次。</p>
+      <table><thead><tr><th>周期设置</th><th>行为</th></tr></thead><tbody><tr><td><span class="tag">大于 0</span></td><td>按秒周期自动采样，例如 60 表示每 60 秒一次。</td></tr><tr><td><span class="tag manual">等于 0</span></td><td>不自动执行，只能使用“立即采样”或 POST 接口。</td></tr><tr><td>停用</td><td>跳过自动采样，但保留定义和历史结果。</td></tr></tbody></table>
+      <h3>结果写入</h3><p>每次采样按当前 UTC 年份选择结果库，写入 <code>sample_time</code>、<code>row_key</code> 以及定义字段。相同采样时间和行标识再次写入时会替换原行。</p>
+      <p>运行监控页显示定义数量、启用数量、自动采样数量、结果年份和最近结果文件时间。</p>
+    </section>
+
+    <section id="query" class="card">
+      <h2>5. 采样查询</h2>
+      <ol><li>进入“采样查询”，选择采样点。</li><li>输入开始和结束时间。</li><li>选择需要显示的字段。</li><li>点击“查询”。</li></ol>
+      <p>查询结果包含采样时间、源表行标识和所选字段。页面显示结果表，并提供数值字段概览和 CSV 导出。查询范围可以跨年，系统会合并对应年份的结果表。页面提供“最近 1 小时”“今天”“最近 24 小时”快捷范围，结果按 500 行分页显示，可用上一页、下一页浏览，CSV 按当前页导出。</p>
+      <p class="note">时间输入使用浏览器本地时间，接口参数使用 Unix 时间戳（秒）。</p>
+    </section>
+
+    <section id="api" class="card">
+      <h2>6. API 接口</h2>
+      <p>FastAPI 自动文档地址为 <code>/docs</code>。主要接口如下：</p>
+      <table class="api"><thead><tr><th>方法和路径</th><th>用途</th></tr></thead><tbody>
+        <tr><td>GET /api/definitions</td><td>获取全部采样定义。</td></tr>
+        <tr><td>POST /api/definitions</td><td>创建采样定义。</td></tr>
+        <tr><td>PUT /api/definitions/{id}</td><td>更新采样定义。</td></tr>
+        <tr><td>DELETE /api/definitions/{id}</td><td>删除采样定义。</td></tr>
+        <tr><td>POST /api/definitions/{id}/enable?enabled=true|false</td><td>启用或停用定义。</td></tr>
+        <tr><td>GET /api/definitions/{id}/runtime</td><td>读取单个采样点运行状态。</td></tr>
+        <tr><td>POST /api/sample/{id}</td><td>立即执行一次采样。</td></tr>
+        <tr><td>GET /api/query/{id}?start=&amp;end=&amp;fields=&amp;limit=&amp;offset=</td><td>按时间、字段和分页参数查询采样结果；返回 total_rows、limit、offset。</td></tr>
+        <tr><td>GET /api/source/tables?source_database=</td><td>读取源库中的表名。</td></tr>
+        <tr><td>GET /api/source/inspect?source_database=&amp;source_table=</td><td>读取源表字段和预览数据。</td></tr>
+        <tr><td>GET /api/status</td><td>读取服务总体状态。</td></tr>
+      </tbody></table>
+      <h3>创建定义示例</h3><pre>POST /api/definitions
+Content-Type: application/json
+
+{
+  "name": "电表A",
+  "source_database": "D:/data/realtime.db",
+  "source_table": "meter",
+  "fields": ["voltage", "current"],
+  "interval_seconds": 60,
+  "filter": "status=1",
+  "enabled": true
+}</pre>
+    </section>
+
+    <section id="start" class="card">
+      <h2>7. 启动与运维</h2>
+      <h3>启动 Web</h3><pre>cd D:\codex\samp
+python -m samp --host 127.0.0.1 --port 8877
+# 默认使用 http://127.0.0.1:8877</pre>
+      <p>如端口被占用，可以指定端口，例如：</p><pre>python -m samp --host 127.0.0.1 --port 8877</pre>
+      <h3>启动独立自动采样进程</h3><pre>python -m samp.sampler</pre>
+      <h3>修改 SQLite 根目录</h3><pre>$env:SAMP_SQLITE_DIR="D:\data\samp"
+python -m samp</pre>
+      <h3>验证服务</h3><pre>Invoke-WebRequest http://127.0.0.1:8877/api/health
+Invoke-WebRequest http://127.0.0.1:8877/api/status</pre>
+    </section>
+
+    <section id="trouble" class="card">
+      <h2>8. 常见问题</h2>
+      <h3>读取源表失败</h3><p>检查数据库路径是否存在、当前进程是否有读取权限、源表名是否拼写正确。可在页面点击“读取字段和预览”查看具体错误。</p>
+      <h3>采样写入 0 行</h3><p>确认源表有数据，并检查过滤条件是否把所有行排除了。没有过滤条件时，服务会读取源表全部行。</p>
+      <h3>查询没有结果</h3><p>确认查询时间覆盖实际采样时间，并检查采样点名是否对应结果库。可以先使用“立即采样”生成一条当前结果，再查询当前时间附近的范围。</p>
+      <h3>删除定义后结果是否还在</h3><p>删除操作只删除 <code>samp_define</code> 中的定义记录，不删除已有的年度结果库；如需清理结果库，应先确认文件和采样点范围后手工处理。</p>
+    </section>
+  </main>
+</div>
+<div class="footer">SAMP Web · 与当前 Python/FastAPI 实现同步</div>
+</body>
+</html>

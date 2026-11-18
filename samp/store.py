@@ -6,10 +6,12 @@ import re
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 _IDENT = re.compile(r"^[A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*$")
+_FILTER_KEY = re.compile(r"^\s*([A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*)\s*=")
 SQLITE_DIR = Path(os.getenv("SAMP_SQLITE_DIR", r"D:\codex\sqldb\realtime\samp"))
 
 
@@ -31,10 +33,30 @@ class Store:
         self.initialize()
 
     @staticmethod
-    def _connect(path: str | Path) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(path: str | Path) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        return conn
+        conn.execute("PRAGMA busy_timeout=5000")
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
+    @staticmethod
+    @contextmanager
+    def _connect_readonly(path: str | Path) -> Iterator[sqlite3.Connection]:
+        resolved = Path(path).expanduser().resolve()
+        uri = f"file:{resolved.as_posix()}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=30, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=5000")
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def initialize(self) -> None:
         schema = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
@@ -77,10 +99,13 @@ class Store:
             raise ValueError("name、source_database、source_table 和 fields 不能为空")
         if not _IDENT.match(name) or not _IDENT.match(source_table) or any(not _IDENT.match(field) for field in fields):
             raise ValueError("名称只能包含字母、数字、下划线或中文")
+        if "row_key" in fields:
+            raise ValueError("row_key 是内部行标识，不能作为采样字段")
         if not source_database:
             raise ValueError("source_database 不能为空")
         if interval < 0:
             raise ValueError("interval_seconds 不能为负数")
+        self._filter_fields(str(payload.get("filter", payload.get("filter_value", ""))))
         now = int(time.time())
         values = (name, source_database, source_table, ",".join(fields), 1, interval, str(payload.get("filter", payload.get("filter_value", ""))), int(bool(payload.get("enabled", True))), 0, now, now)
         with self._lock, self._connect(self.definition_db) as conn:
@@ -109,12 +134,12 @@ class Store:
         return str(source_database or self.default_source_db)
 
     def source_tables(self, source_database: str | None = None) -> list[str]:
-        with self._connect(self._source_database(source_database)) as conn:
+        with self._connect_readonly(self._source_database(source_database)) as conn:
             rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
         return [str(row[0]) for row in rows]
 
     def source_fields(self, source_database: str | None, source_table: str) -> list[str]:
-        with self._connect(self._source_database(source_database)) as conn:
+        with self._connect_readonly(self._source_database(source_database)) as conn:
             rows = conn.execute(f"PRAGMA table_info({self._quote(source_table)})").fetchall()
         return [str(row[1]) for row in rows]
 
@@ -122,7 +147,7 @@ class Store:
         """Return source columns and a small preview for the definition page."""
         database = self._source_database(source_database)
         table = self._quote(source_table)
-        with self._connect(database) as conn:
+        with self._connect_readonly(database) as conn:
             columns = [str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
             if not columns:
                 raise ValueError(f"源表不存在或没有字段: {database}:{source_table}")
@@ -171,19 +196,51 @@ class Store:
                 return False
         return True
 
-    def _read_source(self, source_database: str, source_table: str, expression: str) -> list[tuple[str, dict[str, Any]]]:
-        with self._connect(self._source_database(source_database)) as conn:
+    @staticmethod
+    def _filter_fields(expression: str) -> list[str]:
+        if not expression.strip():
+            return []
+        fields = []
+        for clause in re.split(r"\s+and\s+|,", expression, flags=re.I):
+            match = _FILTER_KEY.match(clause)
+            if not match:
+                raise ValueError("过滤条件只支持 field=value，并用 and 或逗号连接")
+            fields.append(match.group(1))
+        return list(dict.fromkeys(fields))
+
+    def _read_source(self, source_database: str, source_table: str, expression: str, fields: list[str]) -> list[tuple[str, dict[str, Any]]]:
+        with self._connect_readonly(self._source_database(source_database)) as conn:
             table = self._quote(source_table)
-            columns = [str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            columns = [str(row[1]) for row in info]
             if not columns:
                 raise ValueError(f"源表不存在或没有字段: {source_database}:{source_table}")
-            rows = conn.execute(f"SELECT rowid, * FROM {table}").fetchall()
-        key_column = "row_key" if "row_key" in columns else None
+            filter_fields = self._filter_fields(expression)
+            missing = [field for field in [*fields, *filter_fields] if field not in columns]
+            if missing:
+                raise ValueError(f"源表缺少字段: {', '.join(dict.fromkeys(missing))}")
+            primary_keys = [str(row[1]) for row in sorted(info, key=lambda item: item[5]) if row[5]]
+            key_columns = ["row_key"] if "row_key" in columns else primary_keys
+            selected = list(dict.fromkeys([*fields, *filter_fields]))
+            for key_column in key_columns:
+                if key_column not in selected:
+                    selected.append(key_column)
+            select_columns = [self._quote(field) for field in selected]
+            if key_columns:
+                key_sql = ", ".join(self._quote(column) for column in key_columns)
+            else:
+                # Ordinary SQLite tables have rowid; WITHOUT ROWID tables must
+                # expose a primary key so every sampled row can be identified.
+                key_sql = 'rowid AS "__samp_rowid"'
+                selected.append("__samp_rowid")
+                select_columns.append(key_sql)
+            rows = conn.execute(f"SELECT {', '.join(select_columns)} FROM {table}").fetchall()
         result = []
         for row in rows:
-            values = {column: row[column] for column in columns}
-            key = str(values.pop(key_column)) if key_column else str(row[0])
-            if self._matches_filter(values, expression):
+            values = {field: row[field] for field in fields}
+            key = "|".join(str(row[column]) for column in (key_columns or ["__samp_rowid"]))
+            filter_values = {field: row[field] for field in filter_fields}
+            if self._matches_filter(filter_values, expression):
                 result.append((key, values))
         return result
 
@@ -204,8 +261,8 @@ class Store:
     def run_sample(self, samp_id: int, sampled_at: int | None = None) -> dict[str, Any]:
         sampled_at = int(sampled_at or time.time())
         definition = self._raw_definition(samp_id)
-        rows = self._read_source(definition["source_database"] or self.default_source_db, definition["source_table"], definition["filter_value"])
         fields = [field for field in definition["field_name"].split(",") if field]
+        rows = self._read_source(definition["source_database"] or self.default_source_db, definition["source_table"], definition["filter_value"], fields)
         table = self._result_name(definition["samp_name"], sampled_at)
         db_path = self.result_dir / f"{table}.db"
         col_sql = ", ".join(["sample_time INTEGER NOT NULL", "row_key TEXT NOT NULL", *[f'{self._quote(field)} REAL' for field in fields]])
@@ -217,12 +274,23 @@ class Store:
                 conn.execute(f"INSERT OR REPLACE INTO {self._quote(table)} ({', '.join(self._quote(c) for c in columns)}) VALUES ({placeholders})", [sampled_at, key, *[values.get(field) for field in fields]])
         return {"samp_id": samp_id, "sampled_at": sampled_at, "rows_written": len(rows), "database": str(db_path), "table": table}
 
-    def query_samples(self, samp_id: int, start: int, end: int, fields: list[str] | None = None) -> dict[str, Any]:
+    def query_samples(self, samp_id: int, start: int, end: int, fields: list[str] | None = None, limit: int = 1000, offset: int = 0) -> dict[str, Any]:
+        limit = max(1, min(int(limit), 10000))
+        offset = max(0, int(offset))
+        requested_offset = offset
         raw, definition = self._raw_definition(samp_id), self.get_definition(samp_id)
-        selected = fields or definition["fields"]  # type: ignore[index]
-        selected = [field for field in selected if field in definition["fields"] and _IDENT.match(field)]  # type: ignore[index]
+        if fields is None:
+            selected = list(definition["fields"])  # type: ignore[index]
+        else:
+            invalid = [field for field in fields if field not in definition["fields"] or not _IDENT.match(field)]  # type: ignore[index]
+            if invalid:
+                raise ValueError(f"查询字段不在采样定义中: {', '.join(invalid)}")
+            selected = list(dict.fromkeys(fields))
+            if not selected:
+                raise ValueError("至少选择一个查询字段")
         rows: list[dict[str, Any]] = []
         tables: list[str] = []
+        total_rows = 0
         year, last_year = time.gmtime(start).tm_year, time.gmtime(end).tm_year
         while year <= last_year:
             probe = calendar.timegm((year, 1, 1, 0, 0, 0))
@@ -231,18 +299,26 @@ class Store:
             if db_path.exists():
                 with self._connect(db_path) as conn:
                     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
-                        field_sql = ", ".join(self._quote(field) for field in selected)
-                        rows.extend(dict(row) for row in conn.execute(f"SELECT sample_time,row_key,{field_sql} FROM {self._quote(table)} WHERE sample_time BETWEEN ? AND ? ORDER BY sample_time,row_key", (start, end)).fetchall())
                         tables.append(table)
+                        where = "sample_time BETWEEN ? AND ?"
+                        count = conn.execute(f"SELECT COUNT(*) FROM {self._quote(table)} WHERE {where}", (start, end)).fetchone()[0]
+                        total_rows += count
+                        if offset >= count:
+                            offset -= count
+                        elif len(rows) < limit:
+                            field_sql = ", ".join(self._quote(field) for field in selected)
+                            page_size = limit - len(rows)
+                            rows.extend(dict(row) for row in conn.execute(f"SELECT sample_time,row_key,{field_sql} FROM {self._quote(table)} WHERE {where} ORDER BY sample_time,row_key LIMIT ? OFFSET ?", (start, end, page_size, offset)).fetchall())
+                            offset = 0
             year += 1
         rows.sort(key=lambda row: (row["sample_time"], row["row_key"]))
-        return {"definition": definition, "columns": ["sample_time", "row_key", *selected], "rows": rows, "tables": tables}
+        return {"definition": definition, "columns": ["sample_time", "row_key", *selected], "rows": rows, "tables": tables, "total_rows": total_rows, "limit": limit, "offset": requested_offset}
 
     def status(self) -> dict[str, Any]:
         with self._connect(self.definition_db) as conn:
             definitions, enabled = conn.execute("SELECT COUNT(*),COALESCE(SUM(enabled),0) FROM samp_define").fetchone()
         definition_name = Path(self.definition_db).name
-        result_databases = sum(1 for path in self.result_dir.glob("*.db") if path.name != definition_name)
+        result_databases = sum(1 for path in self.result_dir.glob("samp_*.db") if path.name != definition_name)
         return {
             "definitions": definitions,
             "enabled": enabled,
