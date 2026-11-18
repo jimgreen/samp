@@ -23,7 +23,7 @@ INSERT INTO meter(row_key, voltage, current) VALUES ('A01', 220.1, 3.2);
 
 也可以调用 `POST /api/source/rows`，同时传入 `source_database`、`source_table` 和行数据。
 
-查询页面内置最近 1 小时、今天、最近 24 小时快捷范围，支持字段全选/清空、定义搜索，结果按 500 行分页显示并支持当前页 CSV 导出。运行监控支持一次执行全部已启用定义。API 查询支持 `limit`（1-10000）和 `offset` 分页参数，并返回 `total_rows`。
+查询页面内置最近 1 小时、今天、最近 24 小时快捷范围，支持字段全选/清空、定义搜索和每页行数选择，结果支持分页及当前页 CSV 导出。运行监控支持一次执行全部已启用定义。API 查询支持 `limit`（1-10000）和 `offset` 分页参数，并返回 `total_rows`。
 
 独立采样进程使用按上次执行时间调度的并行采样器，默认 4 个工作线程，可用 `python -m samp.sampler --workers 8` 调整并发数。
 
