@@ -12,7 +12,7 @@
 python -m samp
 ```
 
-浏览器打开 <http://127.0.0.1:8877>。也可以使用 `uvicorn samp.app:app --host 127.0.0.1 --port 8877 --reload`。
+浏览器打开 <http://127.0.0.1:8877/definitions>。页面已拆分为采样定义、运行监控、采样查询三个独立地址：`/definitions`、`/runtime`、`/query`。也可以使用 `uvicorn samp.app:app --host 127.0.0.1 --port 8877 --reload`。
 
 默认 SQLite 根目录为 `D:\codex\sqldb\realtime\samp`，也可以通过环境变量 `SAMP_SQLITE_DIR` 修改。采样定义库为该目录下的 `samp_define.db`，默认源库为 `source.db`，结果库直接写入同一目录。源数据表由采样定义中的 `source_database` 和 `source_table` 指定，采样程序通过 SQLite 元数据动态读取，不依赖固定表名。示例导入接口：
 

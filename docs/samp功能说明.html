@@ -20,7 +20,7 @@
       <h2>1. 功能概览</h2>
       <p class="lead">SAMP 用采样定义描述“从哪个 SQLite 数据库的哪张表读取哪些字段、按什么周期保存”，后台按定义执行采样，并提供 Web 查询和 CSV 导出。</p>
       <div class="flow"><div><strong>① 定义</strong>选择源库、源表、字段和周期</div><div><strong>② 读取</strong>按定义访问真实源表</div><div><strong>③ 保存</strong>写入采样点年度结果库</div><div><strong>④ 查询</strong>按时间和字段查看结果</div></div>
-      <ul><li>Web 页面包含采样定义、运行监控、采样查询三个区域。</li><li>源表由采样定义指定，程序不依赖固定的 <code>source_rows</code> 表。</li><li>采样点名、源表名和字段名支持字母、数字、下划线及中文。</li></ul>
+      <ul><li>Web 页面拆分为三个独立页面：<code>/definitions</code> 采样定义、<code>/runtime</code> 运行监控、<code>/query</code> 采样查询。</li><li>源表由采样定义指定，程序不依赖固定的 <code>source_rows</code> 表。</li><li>采样点名、源表名和字段名支持字母、数字、下划线及中文。</li></ul>
     </section>
 
     <section id="storage" class="card">

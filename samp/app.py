@@ -9,12 +9,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .store import SQLITE_DIR, Store
 
 LOGGER = logging.getLogger("samp")
+WEB_DIR = Path(__file__).with_name("web")
 
 
 class DefinitionIn(BaseModel):
@@ -99,6 +101,7 @@ def create_app(definition_db: str | Path = SQLITE_DIR / "samp_define.db", source
 
     app = FastAPI(title="SAMP 采样服务", version="0.1.0", lifespan=lifespan)
     app.state.store = store
+    app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
     @app.get("/api/definitions")
     def definitions(): return store.list_definitions()
@@ -187,8 +190,20 @@ def create_app(definition_db: str | Path = SQLITE_DIR / "samp_define.db", source
     def health():
         return {"status": "ok", "service": "samp", **store.summary(), "scheduler": scheduler_state}
 
-    @app.get("/", response_class=HTMLResponse)
-    def home(): return HTML
+    def render_page(filename: str) -> str:
+        return (WEB_DIR / filename).read_text(encoding="utf-8")
+
+    @app.get("/", include_in_schema=False)
+    def home(): return RedirectResponse("/definitions")
+
+    @app.get("/definitions", response_class=HTMLResponse, include_in_schema=False)
+    def definitions_page(): return render_page("definitions.html")
+
+    @app.get("/runtime", response_class=HTMLResponse, include_in_schema=False)
+    def runtime_page(): return render_page("runtime.html")
+
+    @app.get("/query", response_class=HTMLResponse, include_in_schema=False)
+    def query_page(): return render_page("query.html")
 
     @app.get("/favicon.ico")
     def favicon(): return Response(status_code=204)

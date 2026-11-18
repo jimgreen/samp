@@ -145,3 +145,15 @@ def test_web_api_batch_sample_enabled_definitions(tmp_path):
         assert [item["samp_id"] for item in body["completed"]] == [enabled["id"]]
         assert body["failed"] == []
 
+
+def test_web_pages_are_separated(tmp_path):
+    app = create_app(tmp_path / "samp_define.db", tmp_path / "source.db", tmp_path / "results")
+    with TestClient(app) as client:
+        root = client.get("/", follow_redirects=False)
+        assert root.status_code == 307
+        assert root.headers["location"] == "/definitions"
+        assert "采样定义" in client.get("/definitions").text
+        assert "运行监控" in client.get("/runtime").text
+        assert "采样查询" in client.get("/query").text
+        assert client.get("/static/samp.css").status_code == 200
+
