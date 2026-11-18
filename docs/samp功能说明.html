@@ -78,6 +78,7 @@
         <tr><td>POST /api/definitions/{id}/enable?enabled=true|false</td><td>启用或停用定义。</td></tr>
         <tr><td>GET /api/definitions/{id}/runtime</td><td>读取单个采样点运行状态。</td></tr>
         <tr><td>POST /api/sample/{id}</td><td>立即执行一次采样。</td></tr>
+        <tr><td>POST /api/sample/all</td><td>并行执行全部已启用采样定义。</td></tr>
         <tr><td>GET /api/query/{id}?start=&amp;end=&amp;fields=&amp;limit=&amp;offset=</td><td>按时间、字段和分页参数查询采样结果；返回 total_rows、limit、offset。</td></tr>
         <tr><td>GET /api/source/tables?source_database=</td><td>读取源库中的表名。</td></tr>
         <tr><td>GET /api/source/inspect?source_database=&amp;source_table=</td><td>读取源表字段和预览数据。</td></tr>

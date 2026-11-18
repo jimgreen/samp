@@ -127,3 +127,20 @@ def test_web_api_query_pagination_metadata(tmp_path):
         assert body["limit"] == 2 and body["offset"] == 1
         assert len(body["rows"]) == 2
 
+
+def test_web_api_batch_sample_enabled_definitions(tmp_path):
+    source_db = tmp_path / "source.db"
+    with sqlite3.connect(source_db) as conn:
+        conn.execute("CREATE TABLE meter (id INTEGER PRIMARY KEY, voltage REAL)")
+        conn.execute("INSERT INTO meter VALUES (1, 220.5)")
+    app = create_app(tmp_path / "samp_define.db", source_db, tmp_path / "results")
+    with TestClient(app) as client:
+        enabled = client.post("/api/definitions", json={"name": "enabled_point", "source_database": str(source_db), "source_table": "meter", "fields": ["voltage"], "interval_seconds": 0, "enabled": True}).json()
+        client.post("/api/definitions", json={"name": "disabled_point", "source_database": str(source_db), "source_table": "meter", "fields": ["voltage"], "interval_seconds": 0, "enabled": False})
+        result = client.post("/api/sample/all")
+        assert result.status_code == 200
+        body = result.json()
+        assert body["requested"] == 1
+        assert [item["samp_id"] for item in body["completed"]] == [enabled["id"]]
+        assert body["failed"] == []
+

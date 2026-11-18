@@ -197,16 +197,22 @@ class Store:
         return True
 
     @staticmethod
-    def _filter_fields(expression: str) -> list[str]:
+    def _filter_clauses(expression: str) -> list[tuple[str, str]]:
         if not expression.strip():
             return []
-        fields = []
+        clauses = []
         for clause in re.split(r"\s+and\s+|,", expression, flags=re.I):
             match = _FILTER_KEY.match(clause)
             if not match:
                 raise ValueError("过滤条件只支持 field=value，并用 and 或逗号连接")
-            fields.append(match.group(1))
-        return list(dict.fromkeys(fields))
+            field = match.group(1)
+            expected = clause[match.end():].strip().strip("'\"")
+            clauses.append((field, expected))
+        return list(dict.fromkeys(clauses))
+
+    @classmethod
+    def _filter_fields(cls, expression: str) -> list[str]:
+        return [field for field, _ in cls._filter_clauses(expression)]
 
     def _read_source(self, source_database: str, source_table: str, expression: str, fields: list[str]) -> list[tuple[str, dict[str, Any]]]:
         with self._connect_readonly(self._source_database(source_database)) as conn:
@@ -215,7 +221,8 @@ class Store:
             columns = [str(row[1]) for row in info]
             if not columns:
                 raise ValueError(f"源表不存在或没有字段: {source_database}:{source_table}")
-            filter_fields = self._filter_fields(expression)
+            filter_clauses = self._filter_clauses(expression)
+            filter_fields = [field for field, _ in filter_clauses]
             missing = [field for field in [*fields, *filter_fields] if field not in columns]
             if missing:
                 raise ValueError(f"源表缺少字段: {', '.join(dict.fromkeys(missing))}")
@@ -234,7 +241,9 @@ class Store:
                 key_sql = 'rowid AS "__samp_rowid"'
                 selected.append("__samp_rowid")
                 select_columns.append(key_sql)
-            rows = conn.execute(f"SELECT {', '.join(select_columns)} FROM {table}").fetchall()
+            where = " AND ".join(f"{self._quote(field)} = ?" for field, _ in filter_clauses)
+            params = [expected for _, expected in filter_clauses]
+            rows = conn.execute(f"SELECT {', '.join(select_columns)} FROM {table}{(' WHERE ' + where) if where else ''}", params).fetchall()
         result = []
         for row in rows:
             values = {field: row[field] for field in fields}
