@@ -1,7 +1,7 @@
-/* 采样定义工作台逻辑 */
+/* 采样定义工作台逻辑（支持单元格无缝内嵌编辑周期/过滤 + 抽屉编辑 + 批量导入导出） */
 
 (function () {
-  const { $, esc, t, api, toast, confirmModal, checkedFields, setAllFields, renderFieldChecks, initChrome, onLangChange } = window.SAMP;
+  const { $, esc, t, ICONS, api, toast, confirmModal, checkedFields, setAllFields, renderFieldChecks, initChrome, onLangChange } = window.SAMP;
 
   const state = {
     config: { default_source_db: "", source_databases: [] },
@@ -68,17 +68,16 @@
       return;
     }
 
-    const allChecked = rows.every((d) => state.selectedIds.has(d.id));
-    checkAll.checked = allChecked;
+    checkAll.checked = rows.every((d) => state.selectedIds.has(d.id));
 
     tbody.innerHTML = rows
       .map((d) => {
         const checked = state.selectedIds.has(d.id);
-        const periodText = d.interval_seconds > 0 ? `${d.interval_seconds}${t("unit.sec")}` : t("state.manual");
         const badge = d.enabled
           ? `<span class="badge ok">${esc(t("state.enabled"))}</span>`
           : `<span class="badge muted">${esc(t("state.disabled"))}</span>`;
         const fieldsStr = (d.fields || []).join(", ");
+        const toggleTitle = d.enabled ? t("action.disable") : t("action.enable");
         return `
           <tr class="${checked ? "selected" : ""}" data-row-id="${d.id}">
             <td><input type="checkbox" class="row-check" data-id="${d.id}" ${checked ? "checked" : ""}></td>
@@ -86,23 +85,68 @@
             <td class="mono">${esc(d.source_table)}</td>
             <td class="mono cell-ellipsis" title="${esc(d.source_database)}">${esc(d.source_database)}</td>
             <td class="mono cell-ellipsis-sm" title="${esc(fieldsStr)}">${esc(fieldsStr)}</td>
-            <td class="num">${esc(periodText)}</td>
-            <td class="mono cell-ellipsis-sm" title="${esc(d.filter || "")}">${esc(d.filter || t("empty.dash"))}</td>
+            <td class="cell-input">
+              <input type="number" min="0" step="1" class="num-in inline-period" data-id="${d.id}" value="${esc(d.interval_seconds)}" title="${esc(t("def.label_interval"))}">
+            </td>
+            <td class="cell-input">
+              <input type="text" class="filter-in inline-filter" data-id="${d.id}" value="${esc(d.filter || "")}" placeholder="${esc(t("empty.dash"))}" title="${esc(d.filter || t("def.label_filter"))}">
+            </td>
             <td>${badge}</td>
-            <td>
+            <td class="sticky-actions">
               <div class="cell-actions">
-                <button type="button" class="btn xs" data-act="edit" data-id="${d.id}">${esc(t("action.edit"))}</button>
-                <button type="button" class="btn xs" data-act="copy" data-id="${d.id}">${esc(t("action.copy"))}</button>
-                <button type="button" class="btn xs" data-act="sample" data-id="${d.id}">${esc(t("action.sample_now"))}</button>
-                <a class="btn xs" href="/query?id=${d.id}&range=hour" style="text-decoration:none">${esc(t("action.view_data"))}</a>
-                <button type="button" class="btn xs" data-act="toggle" data-id="${d.id}">${esc(d.enabled ? t("action.disable") : t("action.enable"))}</button>
-                <button type="button" class="btn xs danger" data-act="delete" data-id="${d.id}">${esc(t("action.delete"))}</button>
+                <button type="button" class="btn xs icon-only" data-act="edit" data-id="${d.id}" title="${esc(t("action.edit"))}">${ICONS.edit}</button>
+                <button type="button" class="btn xs icon-only" data-act="copy" data-id="${d.id}" title="${esc(t("action.copy"))}">${ICONS.copy}</button>
+                <button type="button" class="btn xs icon-only" data-act="sample" data-id="${d.id}" title="${esc(t("action.sample_now"))}">${ICONS.play}</button>
+                <a class="btn xs icon-only" href="/query?id=${d.id}&range=hour" title="${esc(t("action.view_data"))}">${ICONS.chart}</a>
+                <button type="button" class="btn xs icon-only" data-act="toggle" data-id="${d.id}" title="${esc(toggleTitle)}">${ICONS.power}</button>
+                <button type="button" class="btn xs icon-only danger" data-act="delete" data-id="${d.id}" title="${esc(t("action.delete"))}">${ICONS.trash}</button>
               </div>
             </td>
           </tr>`;
       })
       .join("");
     updateBatchButtons();
+  }
+
+  async function commitInlineUpdate(inputEl) {
+    const id = Number(inputEl.dataset.id);
+    const def = state.definitions.find((d) => d.id === id);
+    if (!def) return;
+    const isPeriod = inputEl.classList.contains("inline-period");
+    const nextInterval = isPeriod ? Number(inputEl.value) : def.interval_seconds;
+    const nextFilter = isPeriod ? def.filter || "" : inputEl.value.trim();
+
+    if (isPeriod && (!Number.isInteger(nextInterval) || nextInterval < 0)) {
+      inputEl.classList.add("is-invalid");
+      return;
+    }
+    if (nextInterval === def.interval_seconds && nextFilter === (def.filter || "")) {
+      inputEl.classList.remove("is-invalid");
+      return;
+    }
+
+    try {
+      const saved = await api(`/api/definitions/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: def.samp_name,
+          source_database: def.source_database,
+          source_table: def.source_table,
+          fields: def.fields,
+          interval_seconds: nextInterval,
+          filter: nextFilter,
+          enabled: Boolean(def.enabled)
+        })
+      });
+      def.interval_seconds = saved.interval_seconds;
+      def.filter = saved.filter;
+      inputEl.classList.remove("is-invalid");
+      toast(t("def.toast_updated"), "ok");
+    } catch (err) {
+      inputEl.classList.add("is-invalid");
+      toast(err.message, "error");
+    }
   }
 
   function renderSourceDbOptions() {
@@ -449,11 +493,23 @@
 
     $("def-tbody").addEventListener("change", (e) => {
       const cb = e.target.closest(".row-check");
-      if (!cb) return;
-      const id = Number(cb.dataset.id);
-      if (cb.checked) state.selectedIds.add(id);
-      else state.selectedIds.delete(id);
-      renderTable();
+      if (cb) {
+        const id = Number(cb.dataset.id);
+        if (cb.checked) state.selectedIds.add(id);
+        else state.selectedIds.delete(id);
+        renderTable();
+        return;
+      }
+      const inline = e.target.closest(".inline-period, .inline-filter");
+      if (inline) commitInlineUpdate(inline);
+    });
+
+    $("def-tbody").addEventListener("keydown", (e) => {
+      const inline = e.target.closest(".inline-period, .inline-filter");
+      if (inline && e.key === "Enter") {
+        e.preventDefault();
+        inline.blur();
+      }
     });
 
     $("def-tbody").addEventListener("click", (e) => {
@@ -471,15 +527,11 @@
     onLangChange(() => {
       renderMetrics();
       renderTable();
-      const periodZero = $("period-chips").querySelector('[data-period="0"]');
-      if (periodZero) periodZero.textContent = `0 (${t("state.manual")})`;
     });
   }
 
   initChrome();
   bindEvents();
-  const periodZero = $("period-chips").querySelector('[data-period="0"]');
-  if (periodZero) periodZero.textContent = `0 (${t("state.manual")})`;
 
   loadAll().then(() => {
     const editParam = new URLSearchParams(location.search).get("edit");

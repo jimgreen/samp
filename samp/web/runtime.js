@@ -1,7 +1,7 @@
 /* 运行监控、执行日志与结果库管理逻辑（单次 /api/status 消除 N+1） */
 
 (function () {
-  const { $, esc, t, api, toast, confirmModal, formatTime, formatBytes, initChrome, onLangChange } = window.SAMP;
+  const { $, esc, t, ICONS, api, toast, confirmModal, formatTime, formatBytes, syncAlarmsFromStatus, initChrome, onLangChange } = window.SAMP;
 
   const state = {
     activeTab: location.hash === "#storage" ? "storage" : location.hash === "#logs" ? "logs" : "status",
@@ -102,12 +102,12 @@
             <td class="num">${esc(formatCountdown(item.next_run_at))}</td>
             <td class="num">${item.last_duration_ms !== null && item.last_duration_ms !== undefined ? esc(item.last_duration_ms) : esc(t("empty.dash"))}</td>
             <td class="cell-ellipsis" title="${esc(item.last_error || "")}">${msgHtml}</td>
-            <td>
+            <td class="sticky-actions">
               <div class="cell-actions">
-                <button type="button" class="btn xs" data-act="sample" data-id="${item.id}">${esc(t("action.sample_now"))}</button>
-                <a class="btn xs" href="/query?id=${item.id}&range=hour" style="text-decoration:none">${esc(t("action.view_data"))}</a>
-                <a class="btn xs" href="/definitions?edit=${item.id}" style="text-decoration:none">${esc(t("action.edit"))}</a>
-                <button type="button" class="btn xs" data-act="toggle" data-id="${item.id}" data-enabled="${item.enabled ? "1" : "0"}">${esc(item.enabled ? t("action.disable") : t("action.enable"))}</button>
+                <button type="button" class="btn xs icon-only" data-act="sample" data-id="${item.id}" title="${esc(t("action.sample_now"))}">${ICONS.play}</button>
+                <a class="btn xs icon-only" href="/query?id=${item.id}&range=hour" title="${esc(t("action.view_data"))}">${ICONS.chart}</a>
+                <a class="btn xs icon-only" href="/definitions?edit=${item.id}" title="${esc(t("action.edit"))}">${ICONS.edit}</a>
+                <button type="button" class="btn xs icon-only" data-act="toggle" data-id="${item.id}" data-enabled="${item.enabled ? "1" : "0"}" title="${esc(item.enabled ? t("action.disable") : t("action.enable"))}">${ICONS.power}</button>
               </div>
             </td>
           </tr>`;
@@ -172,8 +172,8 @@
             <td class="mono">${esc(range)}</td>
             <td>${rtdbBadge}</td>
             <td>${linkBadge}</td>
-            <td>
-              <button type="button" class="btn xs danger" data-del-db="${esc(db.filename)}" data-rows="${db.row_count}" data-size="${esc(formatBytes(db.size_bytes))}">${esc(t("action.delete"))}</button>
+            <td class="sticky-actions">
+              <button type="button" class="btn xs icon-only danger" data-del-db="${esc(db.filename)}" data-rows="${db.row_count}" data-size="${esc(formatBytes(db.size_bytes))}" title="${esc(t("action.delete"))}">${ICONS.trash}</button>
             </td>
           </tr>`;
       })
@@ -184,6 +184,7 @@
     try {
       const data = await api("/api/status");
       state.statusData = data;
+      syncAlarmsFromStatus(data);
       renderMetrics();
       renderStatusTable();
       if (state.activeTab === "logs" && state.logFilter === "all") {
@@ -303,7 +304,7 @@
     });
   }
 
-  initChrome();
+  initChrome({ pollGlobalAlarms: false });
   bindEvents();
   setTab(state.activeTab);
   loadStatus();

@@ -1,4 +1,4 @@
-/* SAMP 前端公共模块：API、主题与多语言引擎、模态确认框、Toast 与格式化工具 */
+/* SAMP 前端公共模块：API、5 主题引擎、三语 i18n、全局异常报警闭环、统一矢量图标与模态确认框 */
 
 const $ = (id) => document.getElementById(id);
 
@@ -11,10 +11,28 @@ const esc = (value) =>
     "'": "&#39;"
   }[ch]));
 
+/* ===================== 统一 1.5px 线宽矢量图标集 ===================== */
+const ICONS = {
+  edit: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  copy: '<svg class="ico ico-xs" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  play: '<svg class="ico ico-xs" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>',
+  chart: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>',
+  power: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg>',
+  trash: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
+};
+
 /* ===================== 多语言引擎（i18n） ===================== */
 const LANG_STORAGE_KEY = "samp_lang";
 const THEME_STORAGE_KEY = "samp_theme";
+const ACK_STORAGE_KEY = "samp_acked_alarms";
 const SUPPORTED_LANGS = ["zh-CN", "en-US", "ru-RU"];
+const SUPPORTED_THEMES = [
+  "minimalist-light",
+  "precision-dark",
+  "sci-fi-cyan",
+  "sci-fi-purple",
+  "sci-fi-matrix"
+];
 const _i18nListeners = [];
 const _themeListeners = [];
 
@@ -54,6 +72,7 @@ function setLang(lang) {
   if (!SUPPORTED_LANGS.includes(lang)) return;
   localStorage.setItem(LANG_STORAGE_KEY, lang);
   applyI18nToDOM();
+  renderAlarmUI();
   _i18nListeners.forEach((fn) => fn(lang));
 }
 
@@ -61,23 +80,18 @@ function onLangChange(fn) {
   _i18nListeners.push(fn);
 }
 
-/* ===================== 主题引擎（minimalist-light / precision-dark） ===================== */
+/* ===================== 5 主题风格预设引擎 ===================== */
 function getTheme() {
   const saved = localStorage.getItem(THEME_STORAGE_KEY);
-  return saved === "precision-dark" ? "precision-dark" : "minimalist-light";
+  return SUPPORTED_THEMES.includes(saved) ? saved : "minimalist-light";
 }
 
 function applyTheme(theme) {
-  const target = theme === "precision-dark" ? "precision-dark" : "minimalist-light";
+  const target = SUPPORTED_THEMES.includes(theme) ? theme : "minimalist-light";
   document.documentElement.setAttribute("data-theme", target);
   localStorage.setItem(THEME_STORAGE_KEY, target);
-  const btn = $("theme-toggle");
-  if (btn) {
-    btn.innerHTML =
-      target === "precision-dark"
-        ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32 1.41-1.41"/></svg>`
-        : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
-  }
+  const sel = $("theme-select");
+  if (sel) sel.value = target;
   _themeListeners.forEach((fn) => fn(target));
 }
 
@@ -85,20 +99,172 @@ function onThemeChange(fn) {
   _themeListeners.push(fn);
 }
 
-function initChrome() {
+/* ===================== 分级异常与确认状态闭环（确认 ≠ 恢复） ===================== */
+let _activeAlarms = [];
+
+function _getAckedSet() {
+  try {
+    return new Set(JSON.parse(sessionStorage.getItem(ACK_STORAGE_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+function _saveAckedSet(set) {
+  try {
+    sessionStorage.setItem(ACK_STORAGE_KEY, JSON.stringify([...set]));
+  } catch {}
+}
+
+function _ensureAlarmDrawer() {
+  let backdrop = $("samp-alarm-backdrop");
+  if (backdrop) return backdrop;
+  backdrop = document.createElement("div");
+  backdrop.id = "samp-alarm-backdrop";
+  backdrop.className = "drawer-backdrop";
+  backdrop.innerHTML = `
+    <div class="drawer drawer-alarm" role="dialog" aria-modal="true">
+      <div class="drawer-head">
+        <h2 id="samp-alarm-title"></h2>
+        <div class="toolbar-group">
+          <button type="button" class="btn xs" id="samp-alarm-ack-all"></button>
+          <button type="button" class="btn ghost xs" id="samp-alarm-close"></button>
+        </div>
+      </div>
+      <div class="drawer-body" id="samp-alarm-list"></div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  $("samp-alarm-close").addEventListener("click", () => backdrop.classList.remove("open"));
+  $("samp-alarm-ack-all").addEventListener("click", () => {
+    const acked = _getAckedSet();
+    _activeAlarms.forEach((a) => acked.add(a.sig));
+    _saveAckedSet(acked);
+    renderAlarmUI();
+  });
+  $("samp-alarm-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-ack-sig]");
+    if (!btn) return;
+    const acked = _getAckedSet();
+    acked.add(btn.dataset.ackSig);
+    _saveAckedSet(acked);
+    renderAlarmUI();
+  });
+  return backdrop;
+}
+
+function renderAlarmUI() {
+  const pill = $("alarm-pill");
+  if (!pill) return;
+  const count = _activeAlarms.length;
+  if (!count) {
+    pill.classList.add("hidden");
+    const backdrop = $("samp-alarm-backdrop");
+    if (backdrop) backdrop.classList.remove("open");
+    return;
+  }
+  const acked = _getAckedSet();
+  const unacked = _activeAlarms.filter((a) => !acked.has(a.sig)).length;
+  pill.classList.remove("hidden");
+  pill.classList.toggle("acked", unacked === 0);
+  pill.innerHTML = `<span class="alarm-dot"></span><span>${esc(t("alarm.badge", { n: count }))}</span>`;
+
+  const backdrop = $("samp-alarm-backdrop");
+  if (!backdrop) return;
+  $("samp-alarm-title").textContent = `${t("alarm.title")} (${count})`;
+  $("samp-alarm-ack-all").textContent = t("alarm.ack_all");
+  $("samp-alarm-close").textContent = t("action.close");
+  $("samp-alarm-list").innerHTML = _activeAlarms
+    .map((a) => {
+      const isAcked = acked.has(a.sig);
+      const locHref = a.id ? `/definitions?edit=${a.id}` : "/runtime#logs";
+      return `
+        <div class="alarm-card">
+          <div class="alarm-card-head">
+            <strong>${esc(a.title)}</strong>
+            <span class="mono text-muted">${esc(formatTime(a.time, true))}</span>
+          </div>
+          <div class="alarm-card-msg">${esc(a.message)}</div>
+          <div class="alarm-card-foot">
+            <a class="btn xs" href="${locHref}">${esc(t("alarm.locate"))}</a>
+            ${
+              isAcked
+                ? `<span class="badge warn">${esc(t("alarm.acked"))}</span>`
+                : `<button type="button" class="btn xs" data-ack-sig="${esc(a.sig)}">${esc(t("alarm.ack"))}</button>`
+            }
+          </div>
+        </div>`;
+    })
+    .join("");
+}
+
+function syncAlarmsFromStatus(statusData) {
+  const alarms = [];
+  const items = statusData?.items || [];
+  for (const item of items) {
+    if (item.last_status === "error" && item.last_error) {
+      alarms.push({
+        id: item.id,
+        title: item.name,
+        time: item.last_run_at,
+        message: item.last_error,
+        sig: `def:${item.id}:${item.last_error}`
+      });
+    }
+  }
+  const sched = statusData?.scheduler || {};
+  if (!alarms.length && sched.failed > 0 && sched.last_error && !sched.last_success_at) {
+    alarms.push({
+      id: null,
+      title: t("alarm.scheduler_err"),
+      time: sched.last_cycle_at,
+      message: sched.last_error,
+      sig: `sched:${sched.last_error}`
+    });
+  }
+  // 故障恢复后自动从已确认集合中移除归档
+  const activeSigs = new Set(alarms.map((a) => a.sig));
+  const acked = _getAckedSet();
+  [...acked].forEach((sig) => {
+    if (!activeSigs.has(sig)) acked.delete(sig);
+  });
+  _saveAckedSet(acked);
+  _activeAlarms = alarms;
+  renderAlarmUI();
+}
+
+async function pollAlarms() {
+  try {
+    const data = await api("/api/status");
+    syncAlarmsFromStatus(data);
+  } catch {}
+}
+
+function initChrome({ pollGlobalAlarms = true } = {}) {
   applyTheme(getTheme());
+  const themeSelect = $("theme-select");
+  if (themeSelect) {
+    themeSelect.value = getTheme();
+    themeSelect.addEventListener("change", (event) => applyTheme(event.target.value));
+  }
   const langSelect = $("lang-select");
   if (langSelect) {
     langSelect.value = getLang();
     langSelect.addEventListener("change", (event) => setLang(event.target.value));
   }
-  const themeBtn = $("theme-toggle");
-  if (themeBtn) {
-    themeBtn.addEventListener("click", () => {
-      applyTheme(getTheme() === "precision-dark" ? "minimalist-light" : "precision-dark");
+  const pill = $("alarm-pill");
+  if (pill) {
+    pill.addEventListener("click", () => {
+      const backdrop = _ensureAlarmDrawer();
+      renderAlarmUI();
+      backdrop.classList.add("open");
     });
   }
   applyI18nToDOM();
+  if (pollGlobalAlarms) {
+    pollAlarms();
+    setInterval(pollAlarms, 20000);
+  }
 }
 
 /* ===================== HTTP 与反馈 ===================== */
@@ -126,7 +292,7 @@ function toast(message, kind = "info") {
   _toastTimer = setTimeout(() => node.classList.remove("show"), 3200);
 }
 
-/* ===================== 模态高危确认弹窗（默认聚焦取消） ===================== */
+/* ===================== 高危模态确认弹窗（默认聚焦取消，禁点遮罩误关） ===================== */
 function confirmModal({ title, body, confirmText }) {
   return new Promise((resolve) => {
     let backdrop = $("samp-confirm-backdrop");
@@ -172,7 +338,6 @@ function confirmModal({ title, body, confirmText }) {
     cancelBtn.addEventListener("click", onCancel);
     okBtn.addEventListener("click", onOk);
     document.addEventListener("keydown", onKey);
-    // 默认聚焦安全项（取消）
     cancelBtn.focus();
   });
 }
@@ -249,6 +414,7 @@ window.SAMP = {
   $,
   esc,
   t,
+  ICONS,
   getLang,
   setLang,
   onLangChange,
@@ -256,6 +422,7 @@ window.SAMP = {
   getTheme,
   applyTheme,
   onThemeChange,
+  syncAlarmsFromStatus,
   initChrome,
   api,
   toast,

@@ -1,11 +1,12 @@
 /* 零外部依赖 Canvas 2D 交互式多量纲时序趋势图组件
-   - 视图模式：shared（同轴） / normalized（0-100% 归一化，Tooltip 仍显示真实物理值） / stacked（分轨堆叠）
-   - 交互能力：滚轮缩放、拖拽平移、Shift+拖拽框选缩放、双击重置、十字准星 Hover 读数、图例开关、NULL 断点、表格联动定位线
+   - 全量适配 5 套主题（minimalist-light / precision-dark / sci-fi-cyan / sci-fi-purple / sci-fi-matrix）
+   - 遵循 scientific-dashboard 规范：无纯白描边、半透明胶囊浮标、单曲线克制渐变填充（12% -> 0%）、色盲友好序列色
+   - 视图模式：shared（同轴） / normalized（0-100% 归一化，Tooltip 显示真实物理值） / stacked（分轨堆叠）
 */
 
 (function () {
   const PALETTES = {
-    light: {
+    "minimalist-light": {
       bg: "#FFFFFF",
       grid: "#E2E8F0",
       axis: "#CBD5E1",
@@ -20,7 +21,7 @@
       laneBorder: "#E2E8F0",
       series: ["#2563EB", "#D97706", "#0D9488", "#DC2626", "#7C3AED", "#64748B", "#0284C7", "#EA580C"]
     },
-    dark: {
+    "precision-dark": {
       bg: "#111827",
       grid: "rgba(255, 255, 255, 0.07)",
       axis: "rgba(255, 255, 255, 0.16)",
@@ -34,12 +35,65 @@
       labelText: "#F8FAFC",
       laneBorder: "rgba(255, 255, 255, 0.10)",
       series: ["#38BDF8", "#FBBF24", "#34D399", "#FB7185", "#A78BFA", "#94A3B8", "#22D3EE", "#FB923C"]
+    },
+    "sci-fi-cyan": {
+      bg: "#081121",
+      grid: "rgba(0, 229, 255, 0.11)",
+      axis: "rgba(0, 229, 255, 0.28)",
+      text: "#7DA2C4",
+      crosshair: "rgba(0, 229, 255, 0.65)",
+      pinned: "#00E5FF",
+      selectionBg: "rgba(0, 229, 255, 0.16)",
+      selectionBorder: "#00E5FF",
+      labelBg: "rgba(8, 17, 33, 0.94)",
+      labelBorder: "rgba(0, 229, 255, 0.35)",
+      labelText: "#E6F7FF",
+      laneBorder: "rgba(0, 229, 255, 0.18)",
+      series: ["#00E5FF", "#FFB020", "#00E6A8", "#FF4D6D", "#A78BFA", "#7DA2C4", "#38BDF8", "#FB923C"]
+    },
+    "sci-fi-purple": {
+      bg: "#120C24",
+      grid: "rgba(192, 132, 252, 0.11)",
+      axis: "rgba(192, 132, 252, 0.28)",
+      text: "#A695C9",
+      crosshair: "rgba(192, 132, 252, 0.65)",
+      pinned: "#C084FC",
+      selectionBg: "rgba(192, 132, 252, 0.18)",
+      selectionBorder: "#C084FC",
+      labelBg: "rgba(18, 12, 36, 0.94)",
+      labelBorder: "rgba(192, 132, 252, 0.36)",
+      labelText: "#F3EEFF",
+      laneBorder: "rgba(192, 132, 252, 0.18)",
+      series: ["#C084FC", "#FBBF24", "#2DD4BF", "#FB7185", "#60A5FA", "#A695C9", "#E879F9", "#FB923C"]
+    },
+    "sci-fi-matrix": {
+      bg: "#081810",
+      grid: "rgba(0, 230, 118, 0.11)",
+      axis: "rgba(0, 230, 118, 0.28)",
+      text: "#7EB396",
+      crosshair: "rgba(0, 230, 118, 0.65)",
+      pinned: "#00E676",
+      selectionBg: "rgba(0, 230, 118, 0.16)",
+      selectionBorder: "#00E676",
+      labelBg: "rgba(8, 24, 16, 0.94)",
+      labelBorder: "rgba(0, 230, 118, 0.35)",
+      labelText: "#E2FBE9",
+      laneBorder: "rgba(0, 230, 118, 0.18)",
+      series: ["#00E676", "#FBBF24", "#22D3EE", "#FF5C77", "#A78BFA", "#7EB396", "#34D399", "#FB923C"]
     }
   };
 
   function chartPalette() {
     const theme = document.documentElement.getAttribute("data-theme");
-    return theme === "precision-dark" ? PALETTES.dark : PALETTES.light;
+    return PALETTES[theme] || PALETTES["minimalist-light"];
+  }
+
+  function hexToRgba(hex, alpha) {
+    const h = hex.replace("#", "");
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
   function formatAxisTime(sec, spanSec) {
@@ -90,7 +144,7 @@
       this.legendEl = legendEl;
       this.ctx = canvas.getContext("2d");
       this.lines = [];
-      this.mode = "shared"; // "shared" | "normalized" | "stacked"
+      this.mode = "shared";
       this.pinnedTime = null;
       this.fullX = [0, 1];
       this.viewX = [0, 1];
@@ -99,14 +153,27 @@
       this.dragStartPx = 0;
       this.dragCurrPx = 0;
       this.dragStartView = null;
-      this.pad = { top: 10, right: 14, bottom: 24, left: 58 };
+      this.pad = { top: 12, right: 14, bottom: 24, left: 60 };
 
+      this._rafId = null;
       this._bindEvents();
       if (window.ResizeObserver) {
-        this._ro = new ResizeObserver(() => this.draw());
+        this._ro = new ResizeObserver(() => {
+          if (this._rafId !== null) cancelAnimationFrame(this._rafId);
+          this._rafId = requestAnimationFrame(() => {
+            this._rafId = null;
+            this.draw();
+          });
+        });
         this._ro.observe(canvas.parentElement);
       }
-      window.addEventListener("resize", () => this.draw());
+      window.addEventListener("resize", () => {
+        if (this._rafId !== null) cancelAnimationFrame(this._rafId);
+        this._rafId = requestAnimationFrame(() => {
+          this._rafId = null;
+          this.draw();
+        });
+      });
     }
 
     setMode(mode) {
@@ -329,40 +396,59 @@
       return lo;
     }
 
-    _drawLinePath(ctx, line, xMin, xMax, xToPx, yMapFn) {
+    _drawLinePath(ctx, line, xMin, xMax, xToPx, yMapFn, areaFillBounds = null) {
       const { times, values, color } = line;
       const xSpan = Math.max(1e-6, xMax - xMin);
-      ctx.beginPath();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.5;
-      let drawing = false;
-      let drawnPoints = 0;
-      let lastSingle = null;
+      const segments = [];
+      let current = [];
       for (let i = 0; i < times.length; i += 1) {
         const ts = times[i];
         if (ts < xMin - xSpan * 0.2 || ts > xMax + xSpan * 0.2) continue;
         const v = values[i];
         if (v === null) {
-          drawing = false;
+          if (current.length) {
+            segments.push(current);
+            current = [];
+          }
           continue;
         }
-        const px = xToPx(ts);
-        const py = yMapFn(v);
-        if (!drawing) {
-          ctx.moveTo(px, py);
-          drawing = true;
-        } else {
-          ctx.lineTo(px, py);
-        }
-        drawnPoints += 1;
-        lastSingle = { px, py };
+        current.push({ px: xToPx(ts), py: yMapFn(v) });
       }
-      ctx.stroke();
-      if (drawnPoints === 1 && lastSingle) {
+      if (current.length) segments.push(current);
+
+      // 单曲线模式按规范施加克制渐变面积填充（12% -> 0%）
+      if (areaFillBounds && segments.length) {
+        const grad = ctx.createLinearGradient(0, areaFillBounds.top, 0, areaFillBounds.bottom);
+        grad.addColorStop(0, hexToRgba(color, 0.13));
+        grad.addColorStop(1, hexToRgba(color, 0.0));
+        ctx.fillStyle = grad;
+        for (const seg of segments) {
+          if (seg.length < 2) continue;
+          ctx.beginPath();
+          ctx.moveTo(seg[0].px, areaFillBounds.bottom);
+          seg.forEach((pt) => ctx.lineTo(pt.px, pt.py));
+          ctx.lineTo(seg[seg.length - 1].px, areaFillBounds.bottom);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.6;
+      for (const seg of segments) {
+        if (seg.length === 1) {
+          ctx.beginPath();
+          ctx.fillStyle = color;
+          ctx.arc(seg[0].px, seg[0].py, 3, 0, Math.PI * 2);
+          ctx.fill();
+          continue;
+        }
         ctx.beginPath();
-        ctx.fillStyle = color;
-        ctx.arc(lastSingle.px, lastSingle.py, 3, 0, Math.PI * 2);
-        ctx.fill();
+        seg.forEach((pt, idx) => {
+          if (idx === 0) ctx.moveTo(pt.px, pt.py);
+          else ctx.lineTo(pt.px, pt.py);
+        });
+        ctx.stroke();
       }
     }
 
@@ -400,8 +486,8 @@
       const xSpan = Math.max(1e-6, xMax - xMin);
       const xToPx = (t) => plot.x + ((t - xMin) / xSpan) * plot.w;
 
-      // 计算每条曲线的 Y 映射函数
       const lineYMap = new Map();
+      const laneBounds = new Map();
       const stacked = this.mode === "stacked" && visibleLines.length > 1;
       const normalized = this.mode === "normalized";
 
@@ -415,10 +501,9 @@
           const ly = plot.y + idx * (laneH + laneGap);
           const [yMin, yMax] = rangeInWindow(line, xMin, xMax);
           const ySpan = Math.max(1e-9, yMax - yMin);
-          const yFn = (v) => ly + laneH - ((v - yMin) / ySpan) * laneH;
-          lineYMap.set(line.id, yFn);
+          lineYMap.set(line.id, (v) => ly + laneH - ((v - yMin) / ySpan) * laneH);
+          laneBounds.set(line.id, { top: ly, bottom: ly + laneH });
 
-          // 泳道底线与上下极值刻度
           ctx.beginPath();
           ctx.strokeStyle = pal.laneBorder;
           ctx.moveTo(plot.x, Math.round(ly + laneH) + 0.5);
@@ -432,7 +517,6 @@
           ctx.textBaseline = "bottom";
           ctx.fillText(formatAxisVal(yMin), plot.x - 5, ly + laneH - 1);
 
-          // 泳道左上角曲线胶囊标签（半透明胶囊，非白描边）
           const tag = line.label;
           const tw = ctx.measureText(tag).width + 10;
           ctx.fillStyle = pal.labelBg;
@@ -466,7 +550,6 @@
         }
         const sharedSpan = Math.max(1e-9, sharedMax - sharedMin);
 
-        // 水平虚线网格 + Y 轴刻度
         const yTicks = 4;
         ctx.font = "11px JetBrains Mono, Consolas, monospace";
         ctx.textAlign = "right";
@@ -486,6 +569,24 @@
           ctx.fillText(normalized ? `${Math.round(val)}%` : formatAxisVal(val), plot.x - 6, py);
         }
 
+        // 左上角紧凑 Y 轴物理量纲/名称提示（半透明胶囊）
+        const axisTag = normalized ? "%" : visibleLines.length === 1 ? visibleLines[0].label : "";
+        if (axisTag) {
+          ctx.font = "10px JetBrains Mono, Consolas, monospace";
+          const tw = ctx.measureText(axisTag).width + 10;
+          ctx.fillStyle = pal.labelBg;
+          ctx.strokeStyle = pal.labelBorder;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(plot.x + 4, plot.y + 2, tw, 15, 3);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = pal.text;
+          ctx.textAlign = "left";
+          ctx.textBaseline = "top";
+          ctx.fillText(axisTag, plot.x + 9, plot.y + 4);
+        }
+
         for (const line of visibleLines) {
           if (normalized) {
             const [lo, hi] = rangeInWindow(line, xMin, xMax);
@@ -494,6 +595,7 @@
           } else {
             lineYMap.set(line.id, (v) => plot.y + plot.h - ((v - sharedMin) / sharedSpan) * plot.h);
           }
+          laneBounds.set(line.id, { top: plot.y, bottom: plot.y + plot.h });
         }
       }
 
@@ -515,16 +617,24 @@
         ctx.fillText(formatAxisTime(ts, xSpan), plot.x + ratio * plot.w, plot.y + plot.h + 5);
       }
 
-      // 绘制所有曲线
+      // 绘制曲线（单曲线或分轨各自独立泳道支持克制渐变面积填充）
       ctx.save();
       ctx.beginPath();
       ctx.rect(plot.x, plot.y, plot.w, plot.h);
       ctx.clip();
+      const allowFill = visibleLines.length === 1 || stacked;
       for (const line of visibleLines) {
-        this._drawLinePath(ctx, line, xMin, xMax, xToPx, lineYMap.get(line.id));
+        this._drawLinePath(
+          ctx,
+          line,
+          xMin,
+          xMax,
+          xToPx,
+          lineYMap.get(line.id),
+          allowFill ? laneBounds.get(line.id) : null
+        );
       }
 
-      // 表格点击联动定位竖线
       if (this.pinnedTime !== null && this.pinnedTime >= xMin && this.pinnedTime <= xMax) {
         const px = Math.round(xToPx(this.pinnedTime)) + 0.5;
         ctx.beginPath();
@@ -535,7 +645,6 @@
         ctx.stroke();
       }
 
-      // Shift 框选高亮
       if (this.dragMode === "zoom") {
         const x1 = Math.min(this.dragStartPx, this.dragCurrPx);
         const w = Math.abs(this.dragCurrPx - this.dragStartPx);
@@ -547,7 +656,6 @@
       }
       ctx.restore();
 
-      // 定位线底部时间胶囊
       if (this.pinnedTime !== null && this.pinnedTime >= xMin && this.pinnedTime <= xMax) {
         const px = xToPx(this.pinnedTime);
         const text = window.SAMP.formatTime(this.pinnedTime, true);
@@ -568,7 +676,6 @@
         ctx.fillText(text, bx + 5, by + 2);
       }
 
-      // Hover 垂直十字准星 + 真实物理值胶囊 Tooltip
       if (
         this.hoverPx &&
         !this.dragMode &&

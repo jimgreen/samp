@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>采样定义 - SAMP</title>
   <script>
-    document.documentElement.setAttribute(
-      "data-theme",
-      localStorage.getItem("samp_theme") === "precision-dark" ? "precision-dark" : "minimalist-light"
-    );
+    (function(){
+      var t = localStorage.getItem("samp_theme");
+      var ok = ["minimalist-light","precision-dark","sci-fi-cyan","sci-fi-purple","sci-fi-matrix"];
+      document.documentElement.setAttribute("data-theme", ok.indexOf(t) >= 0 ? t : "minimalist-light");
+    })();
   </script>
   <link rel="stylesheet" href="/static/samp.css">
 </head>
@@ -18,13 +19,29 @@
     <div class="topbar-left">
       <a class="brand" href="/definitions"><span class="brand-mark">S</span><span>SAMP</span></a>
       <nav class="nav">
-        <a class="active" href="/definitions" data-i18n="nav.definitions">采样定义</a>
-        <a href="/runtime" data-i18n="nav.runtime">运行监控</a>
-        <a href="/query" data-i18n="nav.query">采样查询</a>
+        <a class="active" href="/definitions">
+          <svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg>
+          <span data-i18n="nav.definitions">采样定义</span>
+        </a>
+        <a href="/runtime">
+          <svg class="ico" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          <span data-i18n="nav.runtime">运行监控</span>
+        </a>
+        <a href="/query">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+          <span data-i18n="nav.query">采样查询</span>
+        </a>
       </nav>
     </div>
     <div class="topbar-right">
-      <button type="button" id="theme-toggle" class="icon-btn" data-i18n-title="theme.toggle"></button>
+      <button type="button" id="alarm-pill" class="alarm-pill hidden"></button>
+      <select id="theme-select" class="select-ctrl ctrl-sm" data-i18n-title="theme.toggle">
+        <option value="minimalist-light" data-i18n="theme.light">极简明亮</option>
+        <option value="precision-dark" data-i18n="theme.dark">精密暗黑</option>
+        <option value="sci-fi-cyan" data-i18n="theme.cyan">科幻电光青</option>
+        <option value="sci-fi-purple" data-i18n="theme.purple">科幻赛博紫</option>
+        <option value="sci-fi-matrix" data-i18n="theme.matrix">科幻矩阵绿</option>
+      </select>
       <select id="lang-select" class="select-ctrl ctrl-sm" data-i18n-title="lang.label">
         <option value="zh-CN">中文</option>
         <option value="en-US">English</option>
@@ -54,10 +71,22 @@
           <button type="button" id="batch-disable" class="btn hidden" data-i18n="action.batch_disable">批量停用</button>
         </div>
         <div class="toolbar-group">
-          <button type="button" id="btn-export-json" class="btn" data-i18n="def.export_json">导出 JSON</button>
-          <button type="button" id="btn-import-json" class="btn" data-i18n="def.import_json">导入 JSON</button>
-          <button type="button" id="btn-refresh" class="btn" data-i18n="action.refresh">刷新</button>
-          <button type="button" id="btn-new" class="btn primary" data-i18n="action.new">新建</button>
+          <button type="button" id="btn-export-json" class="btn">
+            <svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span data-i18n="def.export_json">导出 JSON</span>
+          </button>
+          <button type="button" id="btn-import-json" class="btn">
+            <svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <span data-i18n="def.import_json">导入 JSON</span>
+          </button>
+          <button type="button" id="btn-refresh" class="btn">
+            <svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+            <span data-i18n="action.refresh">刷新</span>
+          </button>
+          <button type="button" id="btn-new" class="btn primary">
+            <svg class="ico ico-xs" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span data-i18n="action.new">新建</span>
+          </button>
         </div>
       </div>
 
@@ -70,10 +99,10 @@
               <th data-i18n="col.source_table">源表</th>
               <th data-i18n="col.source_db">源数据库</th>
               <th data-i18n="col.fields">字段</th>
-              <th class="num" data-i18n="col.interval">周期</th>
+              <th class="num" data-i18n="def.label_interval">周期 (s)</th>
               <th data-i18n="col.filter">过滤</th>
               <th data-i18n="col.status">状态</th>
-              <th data-i18n="col.actions">操作</th>
+              <th class="sticky-actions" data-i18n="col.actions">操作</th>
             </tr>
           </thead>
           <tbody id="def-tbody">
@@ -110,13 +139,13 @@
         </div>
 
         <div class="form-row">
-          <label for="f-interval" data-i18n="def.label_interval">周期（秒，0=手动）</label>
+          <label for="f-interval" data-i18n="def.label_interval">周期 (s)</label>
           <input id="f-interval" class="ctrl mono" type="number" min="0" value="60" required>
         </div>
 
         <div class="form-row span-2">
           <div class="chip-row" id="period-chips">
-            <button type="button" class="btn xs" data-period="0">0 (手动)</button>
+            <button type="button" class="btn xs" data-period="0" data-i18n="state.manual">手动</button>
             <button type="button" class="btn xs" data-period="1">1s</button>
             <button type="button" class="btn xs" data-period="5">5s</button>
             <button type="button" class="btn xs" data-period="10">10s</button>
@@ -156,7 +185,7 @@
         </div>
 
         <div class="form-row span-2">
-          <label for="f-filter" data-i18n="def.label_filter">过滤条件（支持 = != &gt; &gt;= &lt; &lt;= in）</label>
+          <label for="f-filter" data-i18n="def.label_filter">过滤条件</label>
           <div class="input-inline">
             <input id="f-filter" class="ctrl mono" data-i18n-placeholder="def.ph_filter" placeholder="status=1 and voltage>=200">
             <button type="button" id="btn-test-filter" class="btn" data-i18n="action.test_filter">试跑过滤</button>
