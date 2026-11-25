@@ -1,33 +1,54 @@
 # SAMP Web
 
-这是旧版 EMS `sampdef`、`samp`/`autoloadrtdb` 和 `sampview` 的独立 Web/Python 实现。
+旧版 EMS `sampdef`、`samp`/`autoloadrtdb` 与 `sampview` 的独立 Web/Python 实现。
 
-- **采样定义**：创建、编辑、启停采样规则。定义数据库 `D:\codex\sqldb\realtime\samp\samp_define.db` 只有一张 `samp_define` 表；用户只需要选择采样点名、源表、字段和周期。
-- **自动采样**：后台线程按周期读取源数据，写入 `D:\codex\sqldb\realtime\samp\samp_采样点名_年份.db`。每个结果库只有一张同名表，例如 `samp_电表A_2026.db` 内的 `samp_电表A_2026`。
-- **采样查询**：按采样规则和时间范围查询，返回表格数据并可绘制字段趋势图。
+- **采样定义 (`/definitions`)**：高密度主表管理 + 右侧抽屉编辑器，支持源库发现下拉、源表结构与过滤条件实时试跑预览、周期快捷档位、批量启停、JSON 批量导入/导出、复制及改名时同步迁移历史年度结果库。
+- **自动采样与运维监控 (`/runtime`)**：统一 `SamplingScheduler` 支持整周期时间对齐、跨进程防双开调度租约与独立 `samp_runtime.db` 运行态/日志持久化（Web `--no-scheduler` 可直接监控独立 `samp.sampler` 进程）、按结果库路径分片并发写入、结果库元数据缓存及孤儿库安全清理（别名 `/storage`）。
+- **采样查询 (`/query`)**：交互式 Canvas 2D 多量纲曲线图（支持**同轴 / 归一化 / 分轨堆叠**、缩放、平移、框选放大、十字准星真实值读数、图例开关、`NULL` 断点与表格点击联动定位）、多 `row_key` 对比筛选、SQLite 库内聚合（`avg`/`raw`/`max`/`min`/`last`）与原始点上限保护、实时自动刷新与流式全量 CSV 导出。
+- **界面规范**：内置极简明亮（`minimalist-light`）与精密暗黑（`precision-dark`）双主题切换，支持简体中文（`zh-CN`）、英文（`en-US`）、俄文（`ru-RU`）实时多语言切换，零外部 CDN 依赖。
 
 ## 启动
 
 ```powershell
-python -m samp
+python -m samp --host 127.0.0.1 --port 8877
 ```
 
-浏览器打开 <http://127.0.0.1:8877/definitions>。页面已拆分为采样定义、运行监控、采样查询三个独立地址：`/definitions`、`/runtime`、`/query`。也可以使用 `uvicorn samp.app:app --host 127.0.0.1 --port 8877 --reload`。
+支持可选参数：
 
-默认 SQLite 根目录为 `D:\codex\sqldb\realtime\samp`，也可以通过环境变量 `SAMP_SQLITE_DIR` 修改。采样定义库为该目录下的 `samp_define.db`，默认源库为 `source.db`，结果库直接写入同一目录。源数据表由采样定义中的 `source_database` 和 `source_table` 指定，采样程序通过 SQLite 元数据动态读取，不依赖固定表名。示例导入接口：
-
-```sql
-CREATE TABLE meter (row_key TEXT PRIMARY KEY, voltage REAL, current REAL);
-INSERT INTO meter(row_key, voltage, current) VALUES ('A01', 220.1, 3.2);
+```powershell
+python -m samp --db D:\codex\sqldb\realtime\samp\samp_define.db --source-db D:\codex\sqldb\realtime\samp\source.db --result-dir D:\codex\sqldb\realtime\samp --workers 4 --no-scheduler --no-align
 ```
 
-也可以调用 `POST /api/source/rows`，同时传入 `source_database`、`source_table` 和行数据。
+浏览器打开 <http://127.0.0.1:8877/definitions>。三个独立工作台地址为：`/definitions`、`/runtime`（含 `/storage` 快捷跳转）、`/query`。
 
-查询页面内置最近 1 小时、今天、最近 24 小时快捷范围，支持字段全选/清空、定义搜索、状态筛选和每页行数选择，结果支持分页、统计摘要及当前页 CSV 导出。采样定义支持复制，运行监控支持一次执行全部已启用定义。API 查询支持 `limit`（1-10000）和 `offset` 分页参数，并返回 `total_rows`。
+### 独立自动采样进程
 
-独立采样进程使用按上次执行时间调度的并行采样器，默认 4 个工作线程，可用 `python -m samp.sampler --workers 8` 调整并发数。
+若希望 Web 与自动采样解耦，可在启动 Web 时传入 `--no-scheduler`，并单独运行：
 
-详情见 `samp/schema.sql` 和 API 文档 `/docs`。
+```powershell
+python -m samp.sampler --workers 8
+```
 
-完整功能说明见 [`docs/samp功能说明.html`](docs/samp功能说明.html)。
+## 数据存储与 RTDB 互操作
 
+默认 SQLite 根目录为 `D:\codex\sqldb\realtime\samp`，可通过环境变量 `SAMP_SQLITE_DIR` 修改；可选环境变量 `SAMP_ALLOWED_SOURCE_DIRS` 用于限制允许访问的源库根目录（分号或逗号分隔）。
+
+- 定义库：`samp_define.db`（业务表 `samp_define`）。
+- 年度结果库：`samp_采样点名_年份.db`（单业务表同名，按源表列类型 `INTEGER`/`REAL`/`TEXT` 保真建列，内置 `(sample_time, row_key)` 主键及 `(row_key, sample_time)` 索引）。
+- 建表与加列在同一事务中同步更新 `rtdb_schema_*` 结构定义，启动时自动为历史库补登记，支持原生 SQLite 布局的 RTDB 只读打开。
+
+## 过滤条件语法
+
+采样定义的 `filter` 支持白名单安全比较与集合过滤，子句可用 `and` 或 `,` 连接：
+
+```text
+status=1 and voltage>=200 and code in (10, 20) and label != 'off'
+```
+
+## 测试
+
+```powershell
+python -m pytest -q
+```
+
+API 文档见 `/docs`，完整功能说明见 [`docs/samp功能说明.html`](docs/samp功能说明.html)。

@@ -1,11 +1,153 @@
-<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>采样查询 - SAMP</title><link rel='stylesheet' href='/static/samp.css'></head><body><header><h1>SAMP 采样服务</h1><p>按采样点、时间范围和字段查询历史结果</p><nav class='nav'><a href='/definitions'>采样定义</a><a href='/runtime'>运行监控</a><a class='active' href='/query'>采样查询</a></nav></header><main class='page'><div class='toolbar'><h2>采样结果查询</h2><button id='refresh-query' class='btn'>刷新定义</button></div><div class='card'><div class='query-options'><div class='field'><label>采样点</label><select id='query-definition'></select></div><div class='field'><label>开始时间</label><input id='query-start' type='datetime-local'></div><div class='field'><label>结束时间</label><input id='query-end' type='datetime-local'></div><div class='field page-size'><label>每页行数</label><select id='query-limit'><option value='100'>100</option><option value='500' selected>500</option><option value='1000'>1000</option><option value='5000'>5000</option></select></div><button id='run-query' class='btn primary'>查询</button><button id='export-query' class='btn'>导出当前页</button></div><div class='actions'><button id='query-last-hour' class='btn small'>最近 1 小时</button><button id='query-today' class='btn small'>今天</button><button id='query-last-day' class='btn small'>最近 24 小时</button></div><div class='field'><label>查询字段 <span class='muted'>（可多选）</span></label><div class='actions compact'><button type='button' id='query-fields-all' class='btn small'>全选</button><button type='button' id='query-fields-none' class='btn small'>清空</button></div><div id='query-fields' class='field-list'></div></div><div id='query-message' class='muted'>请选择采样点和时间范围。</div></div><div class='card' style='margin-top:18px'><div id='query-table' class='table-wrap'></div><div class='actions'><button id='query-prev' class='btn small'>上一页</button><span id='query-page-info' class='muted'>未查询</span><button id='query-next' class='btn small'>下一页</button></div><div id='query-chart' class='chart'></div></div></main><div id='toast' class='toast'></div><script src='/static/common.js'></script><script>
-const state={definitions:[],lastQuery:null,queryPage:0,queryLimit:500,queryRequest:null};function setDefaultQueryTimes(){const now=Math.floor(Date.now()/1000);$('query-start').value=localDate(now-3600);$('query-end').value=localDate(now)}function setQueryRange(kind){const now=Math.floor(Date.now()/1000),start=new Date();if(kind==='hour'){$('query-start').value=localDate(now-3600);$('query-end').value=localDate(now);return}if(kind==='day'){$('query-start').value=localDate(now-86400);$('query-end').value=localDate(now);return}start.setHours(0,0,0,0);$('query-start').value=localDate(start.getTime()/1000);$('query-end').value=localDate(now)}
-function renderDefinitions(){const current=$('query-definition').value,currentFields=checkedFields($('query-fields'));$('query-definition').innerHTML=state.definitions.map(d=>`<option value='${d.id}'>${esc(d.samp_name)}</option>`).join('');const selected=state.definitions.find(d=>String(d.id)===String(current))||state.definitions[0];if(selected){$('query-definition').value=selected.id;renderFieldChecks($('query-fields'),selected.fields,String(selected.id)===String(current)&&currentFields.length?currentFields:selected.fields)}else $('query-fields').innerHTML='<span class="muted">暂无采样定义</span>'}
-async function loadDefinitions(){try{state.definitions=await api('/api/definitions');renderDefinitions()}catch(error){toast(error.message,true)}}
-function queryRequestFromForm(){const id=$('query-definition').value,start=timestamp($('query-start').value),end=timestamp($('query-end').value),fields=checkedFields($('query-fields'));if(!id){toast('请先创建采样定义',true);return null}if(!Number.isFinite(start)||!Number.isFinite(end)||end<start){toast('请检查查询时间范围',true);return null}if(!fields.length){toast('至少选择一个查询字段',true);return null}return{id,start,end,fields}}
-function renderPager(result){const total=Number(result.total_rows||0),offset=Number(result.offset||0),limit=Number(result.limit||state.queryLimit),page=total?Math.floor(offset/limit)+1:0,pages=total?Math.ceil(total/limit):0;$('query-page-info').textContent=total?`第 ${page} / ${pages} 页（${offset+1}-${Math.min(offset+(result.rows||[]).length,total)}，共 ${total} 行）`:'暂无数据';$('query-prev').disabled=page<=1;$('query-next').disabled=!total||page>=pages}
-function renderQuery(result){const cols=result.columns||[];if(!result.rows.length){$('query-table').innerHTML='<div class="empty">时间范围内没有采样数据。</div>';$('query-chart').innerHTML='<div class="empty">暂无统计摘要</div>';renderPager(result);return}$('query-table').innerHTML=`<table class='data-table'><thead><tr>${cols.map(c=>`<th>${esc(c==='sample_time'?'采样时间':c)}</th>`).join('')}</tr></thead><tbody>${result.rows.map(row=>`<tr>${cols.map(c=>`<td>${esc(c==='sample_time'?new Date(row[c]*1000).toLocaleString():row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;const fields=cols.filter(c=>!['sample_time','row_key'].includes(c));const cards=fields.map(field=>{const values=result.rows.map(row=>row[field]).filter(value=>value!==null&&value!==undefined&&value!=='');const numbers=values.map(Number).filter(Number.isFinite);if(numbers.length===values.length&&numbers.length)return `<div class='metric'><b>${esc(Math.max(...numbers))}</b><span>${esc(field)} · 最大</span><div class='muted'>最小 ${esc(Math.min(...numbers))} · 最新 ${esc(values[values.length-1])}</div></div>`;return `<div class='metric'><b>${esc(values[values.length-1]??'暂无')}</b><span>${esc(field)} · 最新</span><div class='muted'>共 ${values.length} 个非空值</div></div>`}).join('');$('query-chart').innerHTML=`<div class='muted' style='margin-bottom:8px'>当前页字段统计（${result.rows.length} 行）</div><div class='status-row'>${cards||'<span class="muted">没有可统计字段。</span>'}</div>`;renderPager(result)}
-async function runQuery(page=0,useSaved=false){const request=useSaved?state.queryRequest:queryRequestFromForm();if(!request)return;state.queryPage=Math.max(0,page);if(!useSaved)state.queryRequest=request;try{const result=await api(`/api/query/${request.id}?start=${request.start}&end=${request.end}&fields=${encodeURIComponent(request.fields.join(','))}&limit=${state.queryLimit}&offset=${state.queryPage*state.queryLimit}`);state.lastQuery=result;renderQuery(result);$('query-message').textContent=`查询到 ${result.total_rows} 行，当前显示 ${result.rows.length} 行；结果表：${result.tables.join(', ')||'暂无'}`}catch(error){toast(error.message,true)}}
-function exportQuery(){const result=state.lastQuery;if(!result?.rows?.length){toast('没有可导出的查询数据',true);return}const csv=[result.columns,...result.rows.map(row=>result.columns.map(col=>row[col]))].map(row=>row.map(value=>`"${String(value??'').replaceAll('"','""')}"`).join(',')).join('\n'),link=document.createElement('a');link.href=URL.createObjectURL(new Blob([`\ufeff${csv}`],{type:'text/csv;charset=utf-8'}));link.download=`${result.definition.samp_name}_采样结果.csv`;link.click();URL.revokeObjectURL(link.href)}
-$('refresh-query').addEventListener('click',loadDefinitions);$('run-query').addEventListener('click',()=>runQuery());$('export-query').addEventListener('click',exportQuery);$('query-definition').addEventListener('change',()=>{state.queryPage=0;state.queryRequest=null;const def=state.definitions.find(item=>String(item.id)===$('query-definition').value);if(def)renderFieldChecks($('query-fields'),def.fields,def.fields)});$('query-limit').addEventListener('change',()=>{state.queryLimit=Number($('query-limit').value)||500;state.queryPage=0;if(state.queryRequest)runQuery()});$('query-fields-all').addEventListener('click',()=>setAllFields($('query-fields'),true));$('query-fields-none').addEventListener('click',()=>setAllFields($('query-fields'),false));$('query-prev').addEventListener('click',()=>{if(state.queryPage>0)runQuery(state.queryPage-1,true)});$('query-next').addEventListener('click',()=>{if(state.lastQuery&&state.lastQuery.offset+state.lastQuery.rows.length<state.lastQuery.total_rows)runQuery(state.queryPage+1,true)});$('query-last-hour').addEventListener('click',()=>{setQueryRange('hour');runQuery()});$('query-last-day').addEventListener('click',()=>{setQueryRange('day');runQuery()});$('query-today').addEventListener('click',()=>{setQueryRange('today');runQuery()});setDefaultQueryTimes();loadDefinitions();
-</script></body></html>
+<!doctype html>
+<html lang="zh-CN" data-theme="minimalist-light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>采样查询 - SAMP</title>
+  <script>
+    document.documentElement.setAttribute(
+      "data-theme",
+      localStorage.getItem("samp_theme") === "precision-dark" ? "precision-dark" : "minimalist-light"
+    );
+  </script>
+  <link rel="stylesheet" href="/static/samp.css">
+</head>
+<body data-title-key="page.title.query">
+<div class="app-shell">
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="brand" href="/definitions"><span class="brand-mark">S</span><span>SAMP</span></a>
+      <nav class="nav">
+        <a href="/definitions" data-i18n="nav.definitions">采样定义</a>
+        <a href="/runtime" data-i18n="nav.runtime">运行监控</a>
+        <a class="active" href="/query" data-i18n="nav.query">采样查询</a>
+      </nav>
+    </div>
+    <div class="topbar-right">
+      <button type="button" id="theme-toggle" class="icon-btn" data-i18n-title="theme.toggle"></button>
+      <select id="lang-select" class="select-ctrl ctrl-sm" data-i18n-title="lang.label">
+        <option value="zh-CN">中文</option>
+        <option value="en-US">English</option>
+        <option value="ru-RU">Русский</option>
+      </select>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <!-- 单行紧凑查询控制条 + 字段勾选条 -->
+    <section class="panel">
+      <div class="toolbar">
+        <div class="toolbar-group">
+          <select id="q-def" class="select-ctrl" style="min-width:130px"></select>
+          <div class="multi-select" id="key-picker">
+            <button type="button" class="btn multi-trigger" id="key-trigger">
+              <span id="key-trigger-text" data-i18n="filter.all_keys">全部 row_key</span>
+              <span class="text-muted">▾</span>
+            </button>
+            <div class="multi-menu" id="key-menu">
+              <div class="multi-menu-head">
+                <input type="text" id="key-search" class="ctrl" data-i18n-placeholder="q.search_key" placeholder="筛选 row_key">
+                <button type="button" class="btn xs" id="key-all" data-i18n="action.select_all">全选</button>
+                <button type="button" class="btn xs" id="key-none" data-i18n="action.clear">清空</button>
+              </div>
+              <div class="multi-menu-list" id="key-list"></div>
+            </div>
+          </div>
+          <input id="q-start" type="datetime-local" step="1" class="ctrl ctrl-dt">
+          <span class="text-muted">~</span>
+          <input id="q-end" type="datetime-local" step="1" class="ctrl ctrl-dt">
+          <div class="chip-row" id="q-ranges">
+            <button type="button" class="btn xs" data-range="15m" data-i18n="q.range_15m">15m</button>
+            <button type="button" class="btn xs" data-range="hour" data-i18n="q.range_1h">1h</button>
+            <button type="button" class="btn xs" data-range="today" data-i18n="q.range_today">今日</button>
+            <button type="button" class="btn xs" data-range="day" data-i18n="q.range_24h">24h</button>
+            <button type="button" class="btn xs" data-range="7d" data-i18n="q.range_7d">7d</button>
+          </div>
+        </div>
+        <div class="toolbar-group">
+          <select id="q-agg" class="select-ctrl">
+            <option value="avg" data-i18n="q.agg_avg">均值聚合</option>
+            <option value="raw" data-i18n="q.agg_raw">原始点</option>
+            <option value="max" data-i18n="q.agg_max">最大值</option>
+            <option value="min" data-i18n="q.agg_min">最小值</option>
+            <option value="last" data-i18n="q.agg_last">最新值</option>
+          </select>
+          <select id="q-order" class="select-ctrl">
+            <option value="desc" data-i18n="q.order_desc">最新优先</option>
+            <option value="asc" data-i18n="q.order_asc">时间升序</option>
+          </select>
+          <select id="q-auto" class="select-ctrl">
+            <option value="0" data-i18n="q.auto_off">实时:关</option>
+            <option value="5" data-i18n="q.auto_5s">实时:5s</option>
+            <option value="15" data-i18n="q.auto_15s">实时:15s</option>
+          </select>
+          <button type="button" id="btn-query" class="btn primary" data-i18n="action.query">查询</button>
+          <button type="button" id="btn-export" class="btn" data-i18n="action.export_csv">导出 CSV</button>
+        </div>
+      </div>
+
+      <div class="field-bar">
+        <div class="chip-row">
+          <button type="button" id="q-fields-all" class="btn xs" data-i18n="action.select_all">全选</button>
+          <button type="button" id="q-fields-none" class="btn xs" data-i18n="action.clear">清空</button>
+        </div>
+        <div id="q-fields" class="chip-row" style="flex:1 1 auto"></div>
+        <span class="mono text-muted" id="q-meta">—</span>
+      </div>
+    </section>
+
+    <!-- 上半趋势图 + 下半高密度数据表 -->
+    <section class="query-split">
+      <div class="panel">
+        <div class="chart-panel-head">
+          <div class="chart-legend" id="chart-legend"></div>
+          <div class="toolbar-group">
+            <span class="mono text-muted" id="chart-meta"></span>
+            <div class="tabs" id="chart-modes">
+              <button type="button" class="tab-btn active" data-mode="shared" data-i18n="q.mode_shared">同轴</button>
+              <button type="button" class="tab-btn" data-mode="normalized" data-i18n="q.mode_norm">归一化</button>
+              <button type="button" class="tab-btn" data-mode="stacked" data-i18n="q.mode_stacked">分轨</button>
+            </div>
+            <button type="button" id="btn-reset-zoom" class="btn xs" data-i18n="action.reset_zoom">重置缩放</button>
+          </div>
+        </div>
+        <div class="chart-stage">
+          <canvas id="trend-canvas"></canvas>
+        </div>
+        <div class="chart-stats-bar" id="chart-stats">—</div>
+      </div>
+
+      <div class="panel">
+        <div class="table-scroll" id="q-table-wrap">
+          <table class="data-table clickable-rows">
+            <thead id="q-thead"></thead>
+            <tbody id="q-tbody"><tr><td class="empty-cell">—</td></tr></tbody>
+          </table>
+        </div>
+        <div class="pager-bar">
+          <div class="toolbar-group">
+            <select id="q-limit" class="select-ctrl ctrl-sm">
+              <option value="100">100</option>
+              <option value="500" selected>500</option>
+              <option value="1000">1000</option>
+              <option value="5000">5000</option>
+            </select>
+            <span class="mono text-muted" id="q-page-info">—</span>
+          </div>
+          <div class="toolbar-group">
+            <button type="button" id="q-prev" class="btn xs" disabled data-i18n="action.prev">上一页</button>
+            <button type="button" id="q-next" class="btn xs" disabled data-i18n="action.next">下一页</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast"></div>
+<script src="/static/i18n.js"></script>
+<script src="/static/common.js"></script>
+<script src="/static/chart.js"></script>
+<script src="/static/query.js"></script>
+</body>
+</html>

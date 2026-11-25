@@ -1,9 +1,142 @@
-<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>运行监控 - SAMP</title><link rel='stylesheet' href='/static/samp.css'></head><body><header><h1>SAMP 采样服务</h1><p>查看自动采样调度状态和结果写入情况</p><nav class='nav'><a href='/definitions'>采样定义</a><a class='active' href='/runtime'>运行监控</a><a href='/query'>采样查询</a></nav></header><main class='page'><div class='toolbar'><h2>自动采样运行监控</h2><div><button id='sample-all' class='btn primary'>立即执行已启用</button><button id='refresh-runtime' class='btn'>刷新状态</button></div></div><div id='runtime-metrics' class='status-row'></div><div id='scheduler-info' class='notice info'>正在读取调度器状态…</div><div class='card'><div id='runtime-table' class='table-wrap'></div></div></main><div id='toast' class='toast'></div><script src='/static/common.js'></script><script>
-let definitions=[];function renderMetrics(){const enabled=definitions.filter(d=>d.enabled).length;$('runtime-metrics').innerHTML=`<div class='metric'><b>${definitions.length}</b><span>采样定义</span></div><div class='metric'><b>${enabled}</b><span>已启用</span></div><div class='metric'><b>${definitions.filter(d=>d.interval_seconds>0&&d.enabled).length}</b><span>自动采样</span></div>`}
-function renderScheduler(scheduler){const cycle=scheduler.last_cycle_at?new Date(scheduler.last_cycle_at*1000).toLocaleString():'尚未运行',success=scheduler.last_success_at?new Date(scheduler.last_success_at*1000).toLocaleString():'暂无成功记录';$('scheduler-info').textContent=`后台调度正常 · 最近检查：${cycle} · 最近成功：${success} · 成功 ${scheduler.sampled||0} 次 · 失败 ${scheduler.failed||0} 次${scheduler.last_error?` · 最近错误：${scheduler.last_error}`:''}`;$('scheduler-info').className=scheduler.failed?'notice error':'notice info'}
-async function loadRuntime(){try{const [defs,health]=await Promise.all([api('/api/definitions'),api('/api/health')]);definitions=defs;renderMetrics();renderScheduler(health.scheduler||{});if(!definitions.length){$('runtime-table').innerHTML='<div class="empty">暂无运行对象</div>';return}$('runtime-table').innerHTML=`<table class='data-table'><thead><tr><th>采样点</th><th>状态</th><th>周期</th><th>源表</th><th>结果年份</th><th>最近结果</th><th>操作</th></tr></thead><tbody>${definitions.map(d=>`<tr id='runtime-${d.id}'><td>${esc(d.samp_name)}</td><td>${d.enabled?'<span class="badge on">启用</span>':'<span class="badge off">停用</span>'}</td><td>${d.interval_seconds?d.interval_seconds+' 秒':'手动'}</td><td>${esc(d.source_table)}</td><td class='runtime-years'>读取中</td><td class='runtime-last'>读取中</td><td><button class='btn small' data-action='runtime-sample' data-id='${d.id}'>立即采样</button></td></tr>`).join('')}</tbody></table>`;await Promise.all(definitions.map(loadRuntimeRow))}catch(error){toast(error.message,true)}}
-async function loadRuntimeRow(def){try{const data=await api(`/api/definitions/${def.id}/runtime`),row=$(`runtime-${def.id}`);if(!row)return;row.querySelector('.runtime-years').textContent=data.result_years.length?data.result_years.join(', '):'暂无';row.querySelector('.runtime-last').textContent=data.last_result_at?new Date(data.last_result_at*1000).toLocaleString():'暂无'}catch(error){}}
-async function sampleAll(){const button=$('sample-all');button.disabled=true;try{const result=await api('/api/sample/all',{method:'POST'});toast(`批量采样完成：成功 ${result.completed.length} 个，失败 ${result.failed.length} 个`,result.failed.length>0);await loadRuntime()}catch(error){toast(error.message,true)}finally{button.disabled=false}}
-async function sampleNow(id){try{const result=await api(`/api/sample/${id}`,{method:'POST'});toast(`采样完成，写入 ${result.rows_written} 行`);await loadRuntime()}catch(error){toast(error.message,true)}}
-$('sample-all').addEventListener('click',sampleAll);$('refresh-runtime').addEventListener('click',loadRuntime);$('runtime-table').addEventListener('click',event=>{const button=event.target.closest('[data-action="runtime-sample"]');if(button)sampleNow(Number(button.dataset.id))});loadRuntime();setInterval(loadRuntime,15000);
-</script></body></html>
+<!doctype html>
+<html lang="zh-CN" data-theme="minimalist-light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>运行监控 - SAMP</title>
+  <script>
+    document.documentElement.setAttribute(
+      "data-theme",
+      localStorage.getItem("samp_theme") === "precision-dark" ? "precision-dark" : "minimalist-light"
+    );
+  </script>
+  <link rel="stylesheet" href="/static/samp.css">
+</head>
+<body data-title-key="page.title.runtime">
+<div class="app-shell">
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="brand" href="/definitions"><span class="brand-mark">S</span><span>SAMP</span></a>
+      <nav class="nav">
+        <a href="/definitions" data-i18n="nav.definitions">采样定义</a>
+        <a class="active" href="/runtime" data-i18n="nav.runtime">运行监控</a>
+        <a href="/query" data-i18n="nav.query">采样查询</a>
+      </nav>
+    </div>
+    <div class="topbar-right">
+      <button type="button" id="theme-toggle" class="icon-btn" data-i18n-title="theme.toggle"></button>
+      <select id="lang-select" class="select-ctrl ctrl-sm" data-i18n-title="lang.label">
+        <option value="zh-CN">中文</option>
+        <option value="en-US">English</option>
+        <option value="ru-RU">Русский</option>
+      </select>
+    </div>
+  </header>
+
+  <section class="metric-strip">
+    <div class="metric-item"><span class="dot" id="rt-dot"></span><span class="metric-label" data-i18n="metric.scheduler">调度</span><span class="metric-val" id="rt-sched">--</span></div>
+    <div class="metric-item"><span class="metric-label" data-i18n="metric.enabled">启用</span><span class="metric-val" id="rt-enabled">--</span></div>
+    <div class="metric-item"><span class="metric-label" data-i18n="metric.auto">自动</span><span class="metric-val" id="rt-auto">--</span></div>
+    <div class="metric-item"><span class="metric-label" data-i18n="metric.sampled">成功</span><span class="metric-val ok" id="rt-ok">--</span></div>
+    <div class="metric-item"><span class="metric-label" data-i18n="metric.failed">失败</span><span class="metric-val" id="rt-fail">--</span></div>
+    <div class="metric-item"><span class="metric-label" data-i18n="metric.last_cycle">检查</span><span class="metric-val" id="rt-cycle">--</span></div>
+    <div class="metric-item"><span class="metric-label" data-i18n="metric.total_size">占用</span><span class="metric-val" id="rt-size">--</span></div>
+  </section>
+
+  <main class="workspace">
+    <section class="panel grow">
+      <div class="toolbar">
+        <div class="toolbar-group">
+          <div class="tabs" id="rt-tabs">
+            <button type="button" class="tab-btn active" data-tab="status" data-i18n="rt.tab_status">运行状态</button>
+            <button type="button" class="tab-btn" data-tab="logs" data-i18n="rt.tab_logs">执行日志</button>
+            <button type="button" class="tab-btn" data-tab="storage" data-i18n="rt.tab_storage">结果库管理</button>
+          </div>
+          <select id="log-filter" class="select-ctrl hidden">
+            <option value="all" data-i18n="filter.all_logs">全部日志</option>
+            <option value="ok" data-i18n="filter.only_ok">仅成功</option>
+            <option value="error" data-i18n="filter.only_error">仅失败</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <button type="button" id="btn-sample-all" class="btn primary" data-i18n="action.sample_all">全部采样</button>
+          <button type="button" id="btn-refresh" class="btn" data-i18n="action.refresh">刷新</button>
+        </div>
+      </div>
+
+      <!-- Tab 1: 单点运行状态 -->
+      <div class="table-scroll" id="pane-status">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th data-i18n="col.name">采样点</th>
+              <th data-i18n="col.status">状态</th>
+              <th class="num" data-i18n="col.interval">周期</th>
+              <th data-i18n="col.source_table">源表</th>
+              <th data-i18n="col.years">年份</th>
+              <th class="num" data-i18n="col.rows">行数</th>
+              <th class="num" data-i18n="col.size">体积</th>
+              <th class="num" data-i18n="col.last_run">最近采样</th>
+              <th class="num" data-i18n="col.next_run">下次触发</th>
+              <th class="num" data-i18n="col.duration">耗时(ms)</th>
+              <th data-i18n="col.last_msg">结果 / 异常</th>
+              <th data-i18n="col.actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="status-tbody">
+            <tr><td colspan="12" class="empty-cell">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Tab 2: 执行日志 -->
+      <div class="table-scroll hidden" id="pane-logs">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th class="num" data-i18n="col.time">时间</th>
+              <th data-i18n="col.name">采样点</th>
+              <th data-i18n="col.trigger">触发</th>
+              <th data-i18n="col.status">状态</th>
+              <th class="num" data-i18n="col.rows">行数</th>
+              <th class="num" data-i18n="col.duration">耗时(ms)</th>
+              <th data-i18n="col.last_msg">结果 / 异常</th>
+            </tr>
+          </thead>
+          <tbody id="logs-tbody">
+            <tr><td colspan="7" class="empty-cell">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Tab 3: 结果库管理 -->
+      <div class="table-scroll hidden" id="pane-storage">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th data-i18n="col.filename">文件名</th>
+              <th data-i18n="col.name">采样点</th>
+              <th class="num" data-i18n="col.year">年份</th>
+              <th class="num" data-i18n="col.rows">行数</th>
+              <th class="num" data-i18n="col.size">体积</th>
+              <th data-i18n="col.time_range">时间跨度</th>
+              <th data-i18n="col.rtdb">RTDB</th>
+              <th data-i18n="col.status">状态</th>
+              <th data-i18n="col.actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="storage-tbody">
+            <tr><td colspan="9" class="empty-cell">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast"></div>
+<script src="/static/i18n.js"></script>
+<script src="/static/common.js"></script>
+<script src="/static/runtime.js"></script>
+</body>
+</html>

@@ -27,11 +27,12 @@
       <h2>2. 数据存储</h2>
       <p>默认 SQLite 根目录为：</p><pre>D:\codex\sqldb\realtime\samp</pre>
       <table><thead><tr><th>文件</th><th>用途</th><th>结构</th></tr></thead><tbody>
-        <tr><td><code>samp_define.db</code></td><td>采样定义</td><td>只有一张 <code>samp_define</code> 表</td></tr>
-        <tr><td><code>samp_采样点名_年份.db</code></td><td>采样结果</td><td>每个库只有一张同名表，例如 <code>samp_电表A_2026</code></td></tr>
+        <tr><td><code>samp_define.db</code></td><td>采样定义</td><td>一张 <code>samp_define</code> 业务表</td></tr>
+        <tr><td><code>samp_采样点名_年份.db</code></td><td>采样结果</td><td>每个库一张同名业务表，例如 <code>samp_电表A_2026</code></td></tr>
         <tr><td>用户指定的源库</td><td>实时源数据</td><td>由定义中的 <code>source_database</code> 和 <code>source_table</code> 决定</td></tr>
       </tbody></table>
       <div class="note">结果库直接放在 SQLite 根目录。查询跨年度时，服务会按涉及的年份读取多个结果库并合并排序。</div>
+      <p>定义库和结果库内置 RTDB 结构定义。SAMP 建表、补列时会同步更新，并在启动时为历史库补登记。支持原生 SQLite 布局的 RTDB 可以直接打开这些 <code>.db</code> 文件并只读查询。新增字段在首次采样时写入当年结果表，较早的记录在该字段上显示为空。</p>
       <h3>定义表主要字段</h3>
       <table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody>
         <tr><td><code>samp_name</code></td><td>采样点名，唯一，同时参与结果库和结果表命名。</td></tr>
@@ -63,7 +64,7 @@
     <section id="query" class="card">
       <h2>5. 采样查询</h2>
       <ol><li>进入“采样查询”，选择采样点。</li><li>输入开始和结束时间。</li><li>选择需要显示的字段。</li><li>点击“查询”。</li></ol>
-      <p>查询结果包含采样时间、源表行标识和所选字段。页面显示结果表，并提供当前页字段统计摘要和 CSV 导出。查询范围可以跨年，系统会合并对应年份的结果表。页面提供“最近 1 小时”“今天”“最近 24 小时”快捷范围，可选择每页 100、500、1000 或 5000 行，用上一页、下一页浏览，CSV 按当前页导出。</p>
+      <p>查询结果包含采样时间、源表行标识和所选字段。页面上半区提供离线交互式 Canvas 2D 多曲线趋势图（支持滚轮缩放、拖拽平移、Shift 框选放大、十字准星读数、图例开关与按 <code>row_key</code> 分组统计），下半区展示高密度分页数据表，并支持按 <code>row_key</code> 筛选、降采样聚合（均值/原始/最大/最小/最新）、时间升降序切换、实时自动刷新与全量流式 CSV 导出。页面内置极简明亮 / 精密暗黑双主题及中 / 英 / 俄三语实时切换。</p>
       <p class="note">时间输入使用浏览器本地时间，接口参数使用 Unix 时间戳（秒）。</p>
     </section>
 
@@ -76,13 +77,21 @@
         <tr><td>PUT /api/definitions/{id}</td><td>更新采样定义。</td></tr>
         <tr><td>DELETE /api/definitions/{id}</td><td>删除采样定义。</td></tr>
         <tr><td>POST /api/definitions/{id}/enable?enabled=true|false</td><td>启用或停用定义。</td></tr>
-        <tr><td>GET /api/definitions/{id}/runtime</td><td>读取单个采样点运行状态。</td></tr>
+        <tr><td>POST /api/definitions/batch-enable</td><td>批量启用或停用采样定义。</td></tr>
+        <tr><td>GET /api/definitions/{id}/runtime</td><td>读取单个采样点运行状态与调度快照。</td></tr>
         <tr><td>POST /api/sample/{id}</td><td>立即执行一次采样。</td></tr>
         <tr><td>POST /api/sample/all</td><td>并行执行全部已启用采样定义。</td></tr>
-        <tr><td>GET /api/query/{id}?start=&amp;end=&amp;fields=&amp;limit=&amp;offset=</td><td>按时间、字段和分页参数查询采样结果；返回 total_rows、limit、offset。</td></tr>
+        <tr><td>GET /api/query/{id}?start=&amp;end=&amp;fields=&amp;row_keys=&amp;order=&amp;limit=&amp;offset=</td><td>按时间、字段、row_key、排序和分页参数查询采样结果。</td></tr>
+        <tr><td>GET /api/query/{id}/keys?start=&amp;end=</td><td>获取时间范围内的去重 row_key 列表。</td></tr>
+        <tr><td>GET /api/query/{id}/series?start=&amp;end=&amp;fields=&amp;row_keys=&amp;agg=&amp;bucket_seconds=</td><td>获取趋势图聚合/降采样序列与分组统计。</td></tr>
+        <tr><td>GET /api/query/{id}/export?start=&amp;end=&amp;fields=&amp;row_keys=&amp;order=</td><td>全量流式导出 UTF-8 CSV。</td></tr>
+        <tr><td>GET /api/config</td><td>读取服务配置、默认源库与调度状态。</td></tr>
+        <tr><td>GET /api/source/databases</td><td>扫描可用源 SQLite 数据库列表。</td></tr>
         <tr><td>GET /api/source/tables?source_database=</td><td>读取源库中的表名。</td></tr>
-        <tr><td>GET /api/source/inspect?source_database=&amp;source_table=</td><td>读取源表字段和预览数据。</td></tr>
-        <tr><td>GET /api/status</td><td>读取服务总体状态。</td></tr>
+        <tr><td>GET /api/source/inspect?source_database=&amp;source_table=&amp;filter=</td><td>读取源表字段类型、命中计数和预览数据。</td></tr>
+        <tr><td>GET /api/runtime/logs?limit=&amp;status=</td><td>读取最近采样执行与错误日志。</td></tr>
+        <tr><td>GET /api/storage/databases / DELETE /api/storage/databases/{filename}</td><td>查看年度结果库、识别孤儿库并安全删除。</td></tr>
+        <tr><td>GET /api/status</td><td>一次性读取服务总览、全量单点运行态与最近日志。</td></tr>
       </tbody></table>
       <h3>创建定义示例</h3><pre>POST /api/definitions
 Content-Type: application/json
