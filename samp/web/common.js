@@ -25,6 +25,12 @@ const ICONS = {
 const LANG_STORAGE_KEY = "samp_lang";
 const THEME_STORAGE_KEY = "samp_theme";
 const ACK_STORAGE_KEY = "samp_acked_alarms";
+const SIDEBAR_WIDTH_KEY = "samp_sidebar_width";
+const SIDEBAR_COLLAPSED_KEY = "samp_sidebar_collapsed";
+const SIDEBAR_DEFAULT_WIDTH = 188;
+const SIDEBAR_MIN_WIDTH = 136;
+const SIDEBAR_MAX_WIDTH = 320;
+const SIDEBAR_SNAP_HIDE = 96;
 const SUPPORTED_LANGS = ["zh-CN", "en-US", "ru-RU"];
 const SUPPORTED_THEMES = [
   "minimalist-light",
@@ -240,8 +246,79 @@ async function pollAlarms() {
   } catch {}
 }
 
+/* ===================== 左侧目录显隐与可拖拽分隔符 ===================== */
+function initSidebar() {
+  const shell = document.querySelector(".app-shell");
+  if (!shell) return;
+  const resizer = $("sidebar-resizer");
+  const toggleButtons = document.querySelectorAll("[data-sidebar-toggle]");
+
+  const clampWidth = (w) => Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, Math.round(w)));
+
+  const setWidth = (w) => {
+    const val = clampWidth(w);
+    shell.style.setProperty("--sidebar-width", `${val}px`);
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(val));
+  };
+
+  const setCollapsed = (collapsed) => {
+    shell.classList.toggle("sidebar-collapsed", Boolean(collapsed));
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+    window.dispatchEvent(new Event("resize"));
+  };
+
+  const savedW = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+  if (Number.isFinite(savedW) && savedW >= SIDEBAR_MIN_WIDTH) {
+    shell.style.setProperty("--sidebar-width", `${clampWidth(savedW)}px`);
+  }
+  if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1") {
+    shell.classList.add("sidebar-collapsed");
+  }
+
+  toggleButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setCollapsed(!shell.classList.contains("sidebar-collapsed"));
+    });
+  });
+
+  if (resizer) {
+    let dragging = false;
+    resizer.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      dragging = true;
+      document.body.classList.add("resizing-sidebar");
+    });
+
+    window.addEventListener("mousemove", (event) => {
+      if (!dragging) return;
+      if (event.clientX < SIDEBAR_SNAP_HIDE) {
+        dragging = false;
+        document.body.classList.remove("resizing-sidebar");
+        setCollapsed(true);
+        return;
+      }
+      setWidth(event.clientX);
+    });
+
+    window.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove("resizing-sidebar");
+      window.dispatchEvent(new Event("resize"));
+    });
+
+    resizer.addEventListener("dblclick", () => {
+      setCollapsed(false);
+      setWidth(SIDEBAR_DEFAULT_WIDTH);
+      window.dispatchEvent(new Event("resize"));
+    });
+  }
+}
+
 function initChrome({ pollGlobalAlarms = true } = {}) {
   applyTheme(getTheme());
+  initSidebar();
   const themeSelect = $("theme-select");
   if (themeSelect) {
     themeSelect.value = getTheme();
