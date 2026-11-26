@@ -494,4 +494,41 @@ def test_cross_process_runtime_store_and_scheduler_lease(tmp_path):
         assert imp["skipped"] == 1
 
 
+def test_source_tables_summary_rtdb_labels_and_sample_values(tmp_path):
+    source_db = tmp_path / "source.db"
+    with sqlite3.connect(source_db) as conn:
+        conn.execute("CREATE TABLE bus (id INTEGER PRIMARY KEY, ua REAL, remark TEXT, status INTEGER)")
+        conn.executemany(
+            "INSERT INTO bus VALUES (?,?,?,?)",
+            [(1, 220.5, "北站", 1), (2, 221.0, "南站", 0), (3, 219.8, "北站", 1)],
+        )
+        conn.execute("CREATE TABLE rtdb_schema_tables (table_name TEXT PRIMARY KEY, chn_name TEXT)")
+        conn.execute("INSERT INTO rtdb_schema_tables VALUES ('bus', '母线表')")
+        conn.execute("CREATE TABLE rtdb_schema_columns (table_name TEXT, eng_name TEXT, chn_name TEXT)")
+        conn.executemany(
+            "INSERT INTO rtdb_schema_columns VALUES (?,?,?)",
+            [("bus", "ua", "A相电压"), ("bus", "status", "运行状态")],
+        )
+
+    app = create_app(tmp_path / "samp_define.db", source_db, tmp_path / "results", enable_scheduler=False)
+    with TestClient(app) as client:
+        summary = client.get("/api/source/tables/summary", params={"source_database": str(source_db)})
+        assert summary.status_code == 200
+        tables = summary.json()["tables"]
+        assert len(tables) == 1
+        bus = tables[0]
+        assert bus["table"] == "bus"
+        assert bus["chn_name"] == "母线表"
+        assert bus["row_count"] == 3
+        assert bus["numeric_fields"] == ["id", "ua", "status"]
+        assert bus["field_labels"] == {"ua": "A相电压", "status": "运行状态"}
+        assert bus["existing_definitions"] == []
+
+        inspect = client.get("/api/source/inspect", params={"source_database": str(source_db), "source_table": "bus"}).json()
+        assert inspect["field_labels"]["ua"] == "A相电压"
+        assert set(inspect["sample_values"]["remark"]) == {"北站", "南站"}
+        assert set(inspect["sample_values"]["status"]) == {0, 1}
+
+
+
 

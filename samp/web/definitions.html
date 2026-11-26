@@ -97,6 +97,10 @@
             <svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
             <span data-i18n="action.refresh">刷新</span>
           </button>
+          <button type="button" id="btn-batch-wizard" class="btn">
+            <svg class="ico ico-xs" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M17.5 14v7M14 17.5h7"/></svg>
+            <span data-i18n="action.batch_wizard">批量建点</span>
+          </button>
           <button type="button" id="btn-new" class="btn primary">
             <svg class="ico ico-xs" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             <span data-i18n="action.new">新建</span>
@@ -129,7 +133,7 @@
   </div>
 </div>
 
-<!-- 右侧抽屉编辑器 -->
+<!-- 右侧单点极速抽屉编辑器 -->
 <div class="drawer-backdrop" id="drawer-backdrop">
   <form class="drawer" id="def-form">
     <div class="drawer-head">
@@ -148,8 +152,29 @@
       </div>
 
       <div class="form-grid">
+        <div class="form-row span-2">
+          <label for="f-source-db-select" data-i18n="def.label_source_db">源数据库</label>
+          <div class="input-inline">
+            <select id="f-source-db-select" class="select-ctrl mono"></select>
+            <input id="f-source-db-custom" class="ctrl mono hidden" required placeholder="D:/path/to/source.db">
+            <button type="button" id="btn-load-tables" class="btn" data-i18n="action.load_tables">读表</button>
+          </div>
+        </div>
+
+        <div class="form-row span-2">
+          <label for="f-source-table-select" data-i18n="def.label_source_table">源表</label>
+          <div class="input-inline">
+            <select id="f-source-table-select" class="select-ctrl mono"></select>
+            <input id="f-source-table-custom" class="ctrl mono hidden" data-i18n-placeholder="def.ph_table" placeholder="选择或输入表名">
+            <button type="button" id="btn-inspect" class="btn" data-i18n="action.preview">预览</button>
+          </div>
+        </div>
+
         <div class="form-row">
-          <label for="f-name" data-i18n="def.label_name">采样点名</label>
+          <div class="input-inline" style="justify-content:space-between">
+            <label for="f-name" data-i18n="def.label_name">采样点名</label>
+            <span id="f-name-hint" class="text-danger" style="font-size:11px"></span>
+          </div>
           <input id="f-name" class="ctrl" required data-i18n-placeholder="def.ph_name" placeholder="如：电表A">
         </div>
 
@@ -167,31 +192,19 @@
             <button type="button" class="btn xs" data-period="60">60s</button>
             <button type="button" class="btn xs" data-period="300">300s</button>
             <button type="button" class="btn xs" data-period="3600">3600s</button>
+            <label class="field-pill" style="margin-left:auto">
+              <input type="checkbox" id="f-enabled" checked>
+              <span data-i18n="def.label_enabled">启用自动采样</span>
+            </label>
           </div>
-        </div>
-
-        <div class="form-row span-2">
-          <label for="f-source-db" data-i18n="def.label_source_db">源数据库</label>
-          <div class="input-inline">
-            <input id="f-source-db" class="ctrl mono" list="source-db-list" required>
-            <button type="button" id="btn-load-tables" class="btn" data-i18n="action.load_tables">读表</button>
-          </div>
-          <datalist id="source-db-list"></datalist>
-        </div>
-
-        <div class="form-row span-2">
-          <label for="f-source-table" data-i18n="def.label_source_table">源表</label>
-          <div class="input-inline">
-            <input id="f-source-table" class="ctrl mono" list="source-table-list" required data-i18n-placeholder="def.ph_table" placeholder="选择或输入表名">
-            <button type="button" id="btn-inspect" class="btn" data-i18n="action.preview">预览</button>
-          </div>
-          <datalist id="source-table-list"></datalist>
         </div>
 
         <div class="form-row span-2">
           <div class="input-inline" style="justify-content:space-between">
             <label data-i18n="def.label_fields">采样字段</label>
             <div class="chip-row">
+              <input id="f-field-search" class="ctrl ctrl-sm" style="width:110px" data-i18n-placeholder="def.ph_field_search" placeholder="筛选字段">
+              <button type="button" id="btn-fields-num" class="btn xs" data-i18n="action.numeric_only">仅数值列</button>
               <button type="button" id="btn-fields-all" class="btn xs" data-i18n="action.select_all">全选</button>
               <button type="button" id="btn-fields-none" class="btn xs" data-i18n="action.clear">清空</button>
             </div>
@@ -201,23 +214,31 @@
 
         <div class="form-row span-2">
           <label for="f-filter" data-i18n="def.label_filter">过滤条件</label>
-          <div class="input-inline">
+          <div class="filter-builder">
+            <select id="fb-field" class="select-ctrl mono" style="min-width:110px"></select>
+            <select id="fb-op" class="select-ctrl mono" style="width:76px">
+              <option value="=">=</option>
+              <option value="!=">!=</option>
+              <option value=">">&gt;</option>
+              <option value=">=">&gt;=</option>
+              <option value="<">&lt;</option>
+              <option value="<=">&lt;=</option>
+              <option value="in">in</option>
+            </select>
+            <input id="fb-val" class="ctrl mono" list="fb-val-list" style="flex:1 1 110px" data-i18n-placeholder="def.ph_cond_val" placeholder="值">
+            <datalist id="fb-val-list"></datalist>
+            <button type="button" id="btn-add-cond" class="btn xs" data-i18n="action.add_cond">加条件</button>
+          </div>
+          <div class="input-inline" style="margin-top:4px">
             <input id="f-filter" class="ctrl mono" data-i18n-placeholder="def.ph_filter" placeholder="status=1 and voltage>=200">
             <button type="button" id="btn-test-filter" class="btn" data-i18n="action.test_filter">试跑过滤</button>
           </div>
-        </div>
-
-        <div class="form-row span-2">
-          <label class="field-pill" style="width:fit-content">
-            <input type="checkbox" id="f-enabled" checked>
-            <span data-i18n="def.label_enabled">启用自动采样</span>
-          </label>
         </div>
       </div>
 
       <div class="preview-box">
         <div class="preview-head">
-          <span data-i18n="def.preview_title">源表预览</span>
+          <span><span data-i18n="def.preview_title">源表预览</span> · <span class="text-muted" data-i18n="def.click_cell_filter">点击单元格可加过滤</span></span>
           <span class="mono" id="preview-meta">—</span>
         </div>
         <div class="table-scroll" id="preview-wrap"></div>
@@ -226,9 +247,62 @@
 
     <div class="drawer-foot">
       <button type="button" class="btn" id="btn-cancel" data-i18n="action.cancel">取消</button>
-      <button type="submit" class="btn primary" id="btn-save" data-i18n="action.save">保存</button>
+      <button type="submit" class="btn" id="btn-save" data-i18n="action.save">保存</button>
+      <button type="button" class="btn primary" id="btn-save-sample" data-i18n="action.save_and_sample">保存并采样</button>
     </div>
   </form>
+</div>
+
+<!-- 整库批量建点向导抽屉 -->
+<div class="drawer-backdrop" id="batch-backdrop">
+  <div class="drawer drawer-wide">
+    <div class="drawer-head">
+      <h2 data-i18n="def.batch_title">从源库批量建点</h2>
+      <button type="button" class="btn ghost xs" id="batch-close" data-i18n="action.close">关闭</button>
+    </div>
+
+    <div class="batch-bar">
+      <select id="bw-db" class="select-ctrl mono" style="flex:1 1 200px"></select>
+      <select id="bw-field-mode" class="select-ctrl">
+        <option value="numeric" data-i18n="def.batch_fields_num">仅数值列</option>
+        <option value="all" data-i18n="def.batch_fields_all">全部字段</option>
+      </select>
+      <input id="bw-period" type="number" min="0" value="60" class="ctrl mono" style="width:74px" data-i18n-title="def.label_interval">
+      <input id="bw-prefix" type="text" class="ctrl mono" style="width:110px" data-i18n-placeholder="def.ph_prefix" placeholder="名称前缀">
+      <select id="bw-conflict" class="select-ctrl">
+        <option value="skip" data-i18n="def.import_skip">跳过同名</option>
+        <option value="overwrite" data-i18n="def.import_overwrite">覆盖同名</option>
+      </select>
+      <label class="field-pill">
+        <input type="checkbox" id="bw-enabled" checked>
+        <span data-i18n="state.enabled">启用</span>
+      </label>
+    </div>
+
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th style="width:28px"><input type="checkbox" id="bw-check-all"></th>
+            <th data-i18n="col.source_table">源表</th>
+            <th class="num" data-i18n="col.rows">行数</th>
+            <th class="num" data-i18n="col.fields">字段</th>
+            <th data-i18n="col.name">采样点</th>
+            <th class="num" data-i18n="def.label_interval">周期 (s)</th>
+            <th data-i18n="col.status">状态</th>
+          </tr>
+        </thead>
+        <tbody id="bw-tbody">
+          <tr><td colspan="7" class="empty-cell">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="drawer-foot">
+      <button type="button" class="btn" id="batch-cancel" data-i18n="action.cancel">取消</button>
+      <button type="button" class="btn primary" id="batch-submit" disabled>批量创建 (0)</button>
+    </div>
+  </div>
 </div>
 
 <!-- 导入 JSON 模态框 -->

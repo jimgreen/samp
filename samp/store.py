@@ -533,15 +533,19 @@ class Store:
         return self._validate_source_path(target)
 
     def list_source_databases(self) -> list[str]:
-        """扫描可用源 SQLite 数据库文件（排除定义库与年度结果库）。"""
+        """扫描可用源 SQLite 数据库文件（排除定义库、运行态库与年度结果库）。"""
         candidates: list[str] = []
         seen: set[str] = set()
-        def_norm = os.path.normcase(str(Path(self.definition_db).expanduser().resolve()))
+        def_path = Path(self.definition_db).expanduser().resolve()
+        excluded_norms = {
+            os.path.normcase(str(def_path)),
+            os.path.normcase(str(def_path.with_name("samp_runtime.db"))),
+        }
 
         def add_path(path: Path) -> None:
             resolved = path.expanduser().resolve()
             norm = os.path.normcase(str(resolved))
-            if norm in seen or norm == def_norm:
+            if norm in seen or norm in excluded_norms:
                 return
             if _RESULT_FILE.fullmatch(resolved.name):
                 return
@@ -576,6 +580,82 @@ class Store:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
             ).fetchall()
         return [row[0] for row in rows if row[0].lower() not in REGISTRY_TABLES]
+
+    @staticmethod
+    def _rtdb_labels(conn: sqlite3.Connection) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+        """读取源库内置 RTDB 结构表中的中文表名与中文列名（存在时返回，不报错）。"""
+        table_labels: dict[str, str] = {}
+        col_labels: dict[str, dict[str, str]] = {}
+        try:
+            has_tables = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rtdb_schema_tables'"
+            ).fetchone()
+            if has_tables:
+                for row in conn.execute("SELECT table_name, chn_name FROM rtdb_schema_tables").fetchall():
+                    t_name, c_name = str(row[0]), str(row[1] or "")
+                    if c_name and c_name != t_name:
+                        table_labels[t_name] = c_name
+            has_cols = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rtdb_schema_columns'"
+            ).fetchone()
+            if has_cols:
+                for row in conn.execute("SELECT table_name, eng_name, chn_name FROM rtdb_schema_columns").fetchall():
+                    t_name, eng, chn = str(row[0]), str(row[1]), str(row[2] or "")
+                    if chn and chn != eng:
+                        col_labels.setdefault(t_name, {})[eng] = chn
+        except sqlite3.Error:
+            pass
+        return table_labels, col_labels
+
+    def source_tables_summary(self, source_database: str | None = None) -> dict[str, Any]:
+        """一次返回源库全部业务表的行数、字段类型、数值字段、RTDB 中文名及已有采样点引用。"""
+        database = self._source_database(source_database)
+        db_norm = os.path.normcase(str(Path(database).expanduser().resolve()))
+        existing_by_table: dict[str, list[str]] = {}
+        for item in self.list_definitions():
+            src = item.get("source_database") or self.default_source_db
+            try:
+                if os.path.normcase(str(Path(src).expanduser().resolve())) == db_norm:
+                    existing_by_table.setdefault(str(item["source_table"]), []).append(str(item["samp_name"]))
+            except OSError:
+                pass
+
+        tables_out: list[dict[str, Any]] = []
+        with self._connect_readonly(database) as conn:
+            table_labels, col_labels = self._rtdb_labels(conn)
+            raw_tables = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                ).fetchall()
+                if str(row[0]).lower() not in REGISTRY_TABLES
+            ]
+            for tbl in raw_tables:
+                if not _IDENT.match(tbl):
+                    continue
+                quoted = self._quote(tbl)
+                info = conn.execute(f"PRAGMA table_info({quoted})").fetchall()
+                all_cols = [str(row[1]) for row in info]
+                col_types = {str(row[1]): _normalize_sql_type(str(row[2])) for row in info}
+                biz_fields = [c for c in all_cols if c.lower() not in _RESULT_KEYS and _IDENT.match(c)]
+                numeric_fields = [c for c in biz_fields if col_types.get(c) in ("INTEGER", "REAL")]
+                try:
+                    row_count = int(conn.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0])
+                except sqlite3.Error:
+                    row_count = 0
+                tables_out.append(
+                    {
+                        "table": tbl,
+                        "chn_name": table_labels.get(tbl, ""),
+                        "row_count": row_count,
+                        "fields": biz_fields,
+                        "numeric_fields": numeric_fields,
+                        "field_types": {c: col_types[c] for c in biz_fields},
+                        "field_labels": col_labels.get(tbl, {}),
+                        "existing_definitions": existing_by_table.get(tbl, []),
+                    }
+                )
+        return {"source_database": database, "tables": tables_out}
 
     def _source_table(self, source_table: str) -> str:
         if source_table.lower() in REGISTRY_TABLES:
@@ -648,7 +728,7 @@ class Store:
         limit: int = 20,
         filter_expr: str = "",
     ) -> dict[str, Any]:
-        """读取源表列信息、总行数与样例预览，支持实时测试过滤条件命中效果。"""
+        """读取源表列信息、RTDB 中文名、列去重样本值、总行数与过滤命中预览。"""
         database = self._source_database(source_database)
         table = self._source_table(source_table)
         with self._connect_readonly(database) as conn:
@@ -657,6 +737,11 @@ class Store:
             if not columns:
                 raise ValueError(f"源表不存在或没有字段: {database}:{source_table}")
             col_types = {str(row[1]): _normalize_sql_type(str(row[2])) for row in info}
+            _, col_labels_all = self._rtdb_labels(conn)
+            field_labels = col_labels_all.get(source_table, {})
+            numeric_fields = [
+                c for c in columns if c.lower() not in _RESULT_KEYS and col_types.get(c) in ("INTEGER", "REAL")
+            ]
             total_rows = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
             where_sql, params, _ = self._build_filter_sql(filter_expr, col_types)
             if where_sql:
@@ -668,11 +753,30 @@ class Store:
             safe_limit = max(1, min(int(limit), 100))
             query_sql = f"SELECT * FROM {table}{(' WHERE ' + where_sql) if where_sql else ''} LIMIT ?"
             rows = [dict(row) for row in conn.execute(query_sql, [*params, safe_limit]).fetchall()]
+            # 收集每列前 20 个非空去重样本值供可视化过滤下拉候选（限制最多前 40 列防超宽表耗时）
+            sample_values: dict[str, list[Any]] = {}
+            for col in columns[:40]:
+                if not _IDENT.match(col):
+                    continue
+                try:
+                    q_col = self._quote(col)
+                    vals = [
+                        r[0]
+                        for r in conn.execute(
+                            f"SELECT DISTINCT {q_col} FROM {table} WHERE {q_col} IS NOT NULL LIMIT 20"
+                        ).fetchall()
+                    ]
+                    sample_values[col] = vals
+                except sqlite3.Error:
+                    pass
         return {
             "source_database": database,
             "source_table": source_table,
             "fields": columns,
             "field_types": col_types,
+            "field_labels": field_labels,
+            "numeric_fields": numeric_fields,
+            "sample_values": sample_values,
             "total_rows": total_rows,
             "matched_rows": matched_rows,
             "rows": rows,

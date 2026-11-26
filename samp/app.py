@@ -313,6 +313,13 @@ def create_app(
     def source_databases():
         return {"databases": store.list_source_databases(), "default": str(Path(store.default_source_db)).replace("\\", "/")}
 
+    @app.get("/api/source/tables/summary")
+    def source_tables_summary(source_database: str | None = None):
+        try:
+            return store.source_tables_summary(source_database)
+        except (ValueError, sqlite3.Error) as exc:
+            raise HTTPException(400, str(exc))
+
     @app.get("/api/source/tables")
     def source_tables(source_database: str | None = None):
         try:

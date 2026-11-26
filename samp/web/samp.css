@@ -967,6 +967,53 @@ body.resizing-sidebar {
   color: var(--text-tertiary);
 }
 
+.field-chn {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.ctrl.is-invalid {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px var(--danger-soft);
+}
+
+.filter-builder {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.filter-builder .select-ctrl,
+.filter-builder .ctrl {
+  height: 25px;
+  font-size: 11px;
+}
+
+.preview-box .data-table td.clickable-cell {
+  cursor: pointer;
+}
+
+.preview-box .data-table td.clickable-cell:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.drawer.drawer-wide {
+  width: min(760px, 96vw);
+}
+
+.batch-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: var(--border);
+  background: var(--bg-subtle);
+  flex-shrink: 0;
+}
+
 /* 查询页上下分栏：图 + 表占 80%+ 视口 */
 .query-split {
   flex: 1 1 auto;

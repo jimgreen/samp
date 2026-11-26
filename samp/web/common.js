@@ -472,7 +472,8 @@ function setAllFields(container, checked) {
   container.dispatchEvent(new Event("change"));
 }
 
-function renderFieldChecks(container, fields, checked, fieldTypes = {}) {
+function renderFieldChecks(container, fields, checked, fieldTypes = {}, fieldLabels = {}, filterKeyword = "") {
+  const kw = (filterKeyword || "").trim().toLowerCase();
   const list = (fields || []).filter((f) => f !== "row_key" && f !== "sample_time");
   if (!list.length) {
     container.innerHTML = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
@@ -481,8 +482,11 @@ function renderFieldChecks(container, fields, checked, fieldTypes = {}) {
   const checkedSet = new Set(checked || []);
   container.innerHTML = list
     .map((field) => {
+      const chn = fieldLabels[field] || "";
+      const hidden = kw && !field.toLowerCase().includes(kw) && !chn.toLowerCase().includes(kw);
+      const labelHtml = chn ? `<span class="field-chn">${esc(chn)}</span>` : "";
       const fType = fieldTypes[field] ? `<span class="field-type-tag">${esc(fieldTypes[field].slice(0, 3))}</span>` : "";
-      return `<label class="field-pill"><input type="checkbox" value="${esc(field)}" ${checkedSet.has(field) ? "checked" : ""}><span>${esc(field)}</span>${fType}</label>`;
+      return `<label class="field-pill ${hidden ? "hidden" : ""}" title="${esc(chn ? `${field} · ${chn}` : field)}"><input type="checkbox" value="${esc(field)}" ${checkedSet.has(field) ? "checked" : ""}><span>${esc(field)}</span>${labelHtml}${fType}</label>`;
     })
     .join("");
 }
