@@ -919,10 +919,44 @@ class Store:
         ]
         return {"version": 2, "exported_at": int(time.time()), "count": len(items), "items": items}
 
+    def list_directories(self, max_depth: int = 6) -> list[str]:
+        """扫描 root_dir 下所有多级目录（相对路径，含根目录 '.'），按层级字典序返回。"""
+        dirs: list[str] = ["."]
+        seen = {"."}
+        # 使用前序深度遍历保证父目录紧邻子目录，便于前端按层级展示
+        def walk(current: Path, depth: int) -> None:
+            if depth >= max_depth:
+                return
+            try:
+                children = sorted(
+                    (p for p in current.iterdir() if p.is_dir()),
+                    key=lambda p: p.name.lower(),
+                )
+            except OSError:
+                return
+            for entry in children:
+                name = entry.name
+                if name.startswith(".") or name in _SKIP_SCAN_DIRS:
+                    continue
+                rel = self.to_relative_path(entry)
+                if rel not in seen:
+                    seen.add(rel)
+                    dirs.append(rel)
+                walk(entry, depth + 1)
+
+        if self.root_dir.exists() and self.root_dir.is_dir():
+            walk(self.root_dir, 0)
+        return dirs
+
     def list_target_dirs(self) -> list[str]:
-        """返回默认结果目录与所有定义中出现过的目标目录（相对路径）。"""
-        dirs: list[str] = [self.to_relative_path(self.result_dir)]
-        seen = {dirs[0]}
+        """返回默认结果目录、root_dir 全部多级子目录与定义中已用过的目标目录（相对路径）。"""
+        default_rel = self.to_relative_path(self.result_dir)
+        dirs: list[str] = [default_rel]
+        seen = {default_rel}
+        for rel in self.list_directories():
+            if rel not in seen:
+                seen.add(rel)
+                dirs.append(rel)
         for item in self.list_definitions():
             td = item.get("target_dir") or ""
             if td and td not in seen:
@@ -1018,7 +1052,7 @@ class Store:
         target = str(source_database or self.default_source_db)
         return self._validate_source_path(target)
 
-    def _iter_db_files(self, base_dir: Path, max_depth: int = 4) -> Iterator[Path]:
+    def _iter_db_files(self, base_dir: Path, max_depth: int = 6) -> Iterator[Path]:
         """在指定目录下按有限深度递归扫描 .db 文件，跳过缓存与版本库目录。"""
         if not base_dir.exists() or not base_dir.is_dir():
             return
@@ -1066,7 +1100,7 @@ class Store:
             seen.add(norm)
             candidates.append(self.to_relative_path(resolved))
 
-        # 优先收集已真实存在的源库，再保底纳入默认源库与已引用源库
+        # 优先收集磁盘上真实存在的 .db 文件（深度最深 6 层），再保底纳入默认源库与已引用源库
         scan_roots = [self.root_dir, self.result_dir, Path(self.default_source_db).parent, *self._allowed_source_dirs()]
         scanned_roots: set[str] = set()
         for directory in scan_roots:
@@ -1074,9 +1108,11 @@ class Store:
             if dir_norm in scanned_roots:
                 continue
             scanned_roots.add(dir_norm)
-            for db_file in self._iter_db_files(directory, max_depth=4):
+            for db_file in self._iter_db_files(directory, max_depth=6):
                 add_path(db_file)
 
+        # 按相对路径稳定排序，再追加不存在的默认源库兜底（确保真实存在的源库永远排前面）
+        candidates.sort(key=lambda s: s.lower())
         add_path(self.default_source_db)
 
         for definition in self.list_definitions():

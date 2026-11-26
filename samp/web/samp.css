@@ -621,6 +621,12 @@ body.resizing-sidebar {
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
+.select-ctrl {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .ctrl:focus,
 .select-ctrl:focus {
   border-color: var(--accent);

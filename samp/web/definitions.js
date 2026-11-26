@@ -5,9 +5,10 @@
 
   const IDENT_RE = /^[A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*$/;
   const CUSTOM_VAL = "__custom__";
+  const ALL_DIRS_VAL = "__all__";
 
   const state = {
-    config: { default_source_db: "", source_databases: [], target_dirs: [], sqlite_dir: "samp" },
+    config: { default_source_db: "", source_databases: [], directories: ["."], target_dirs: [], sqlite_dir: "samp" },
     definitions: [],
     health: null,
     selectedIds: new Set(),
@@ -38,6 +39,29 @@
     let idx = 2;
     while (used.has(`${clean}_${idx}`)) idx += 1;
     return `${clean}_${idx}`;
+  }
+
+  function dirOf(relPath) {
+    const clean = String(relPath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+    const idx = clean.lastIndexOf("/");
+    return idx < 0 ? "." : clean.slice(0, idx) || ".";
+  }
+
+  function baseOf(relPath) {
+    const clean = String(relPath || "").replace(/\\/g, "/");
+    const idx = clean.lastIndexOf("/");
+    return idx < 0 ? clean : clean.slice(idx + 1);
+  }
+
+  function formatDirLabel(relDir) {
+    if (!relDir || relDir === ".") return t("def.root_dir_opt");
+    return `${relDir}/`;
+  }
+
+  function currentTargetDir() {
+    const sel = $("f-target-dir-select").value;
+    if (sel === CUSTOM_VAL) return $("f-target-dir-custom").value.trim();
+    return sel;
   }
 
   function currentSourceDb() {
@@ -93,11 +117,6 @@
     $("m-root").textContent = rootText;
     $("m-root").title = rootText;
     if ($("f-root-hint")) $("f-root-hint").textContent = state.config.root_dir ? `${state.config.root_dir}/` : "";
-    const dirList = $("target-dir-list");
-    if (dirList) {
-      const dirs = state.config.target_dirs || [];
-      dirList.innerHTML = dirs.map((d) => `<option value="${esc(d)}"></option>`).join("");
-    }
 
     const dot = $("m-sched-dot");
     const val = $("m-sched");
@@ -249,7 +268,64 @@
     }
   }
 
-  /* ===================== 单点极速抽屉（自动级联 + 可视化过滤） ===================== */
+  /* ===================== 单点弹窗多级目录 + 源库自动级联 ===================== */
+  function collectedDirs() {
+    const list = [];
+    const seen = new Set();
+    const push = (d) => {
+      const val = String(d || "").trim().replace(/\\/g, "/").replace(/\/+$/, "") || ".";
+      if (!seen.has(val)) {
+        seen.add(val);
+        list.push(val);
+      }
+    };
+    (state.config.directories || ["."]).forEach(push);
+    (state.config.target_dirs || []).forEach(push);
+    (state.config.source_databases || []).forEach((p) => {
+      if (!/^[a-zA-Z]:/.test(p) && !p.startsWith("/")) push(dirOf(p));
+    });
+    return list;
+  }
+
+  function renderTargetDirSelect(selectEl, targetDir = "", allowCustom = true) {
+    const defaultDir = state.config.sqlite_dir || "samp";
+    const allDirs = collectedDirs();
+    const opts = [`<option value="">${esc(`${defaultDir}/`)}</option>`];
+    const validVals = new Set([""]);
+    allDirs.forEach((d) => {
+      if (d === defaultDir) return;
+      validVals.add(d);
+      opts.push(`<option value="${esc(d)}">${esc(formatDirLabel(d))}</option>`);
+    });
+    if (allowCustom) {
+      opts.push(`<option value="${CUSTOM_VAL}">${esc(t("def.custom_dir"))}</option>`);
+    }
+    selectEl.innerHTML = opts.join("");
+
+    const norm = String(targetDir || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+    const customInput = allowCustom ? $("f-target-dir-custom") : null;
+    if (!norm || norm === defaultDir) {
+      selectEl.value = "";
+      if (customInput) {
+        customInput.value = "";
+        customInput.classList.add("hidden");
+      }
+    } else if (validVals.has(norm)) {
+      selectEl.value = norm;
+      if (customInput) {
+        customInput.value = "";
+        customInput.classList.add("hidden");
+      }
+    } else if (allowCustom && customInput) {
+      selectEl.value = CUSTOM_VAL;
+      customInput.value = norm;
+      customInput.classList.remove("hidden");
+    } else {
+      selectEl.insertAdjacentHTML("beforeend", `<option value="${esc(norm)}">${esc(formatDirLabel(norm))}</option>`);
+      selectEl.value = norm;
+    }
+  }
+
   function renderSourceDbSelect(selectEl, targetDb = null, allowCustom = true) {
     const list = state.config.source_databases || [];
     const opts = list.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`);
@@ -257,7 +333,7 @@
       opts.push(`<option value="${CUSTOM_VAL}">${esc(t("def.custom_path"))}</option>`);
     }
     selectEl.innerHTML = opts.join("");
-    const desired = targetDb || state.config.default_source_db || list[0] || "";
+    const desired = targetDb || list[0] || state.config.default_source_db || "";
     if (list.includes(desired)) {
       selectEl.value = desired;
       if (allowCustom) {
@@ -270,6 +346,76 @@
       $("f-source-db-custom").classList.remove("hidden");
       $("f-source-db-custom").required = true;
     }
+  }
+
+  function renderSourceDbForDir(selectedDir, targetDb = null) {
+    const dbSel = $("f-source-db-select");
+    const customIn = $("f-source-db-custom");
+    const allDbs = state.config.source_databases || [];
+    const filtered =
+      selectedDir === ALL_DIRS_VAL
+        ? allDbs
+        : allDbs.filter((p) => !/^[a-zA-Z]:/.test(p) && !p.startsWith("/") && dirOf(p) === selectedDir);
+
+    const opts = [];
+    if (!filtered.length) {
+      opts.push(`<option value="" disabled>${esc(t("def.no_db_in_dir"))}</option>`);
+    } else {
+      filtered.forEach((p) => {
+        const label = selectedDir === ALL_DIRS_VAL ? p : baseOf(p);
+        opts.push(`<option value="${esc(p)}" title="${esc(p)}">${esc(label)}</option>`);
+      });
+    }
+    opts.push(`<option value="${CUSTOM_VAL}">${esc(t("def.custom_path"))}</option>`);
+    dbSel.innerHTML = opts.join("");
+
+    if (targetDb && filtered.includes(targetDb)) {
+      dbSel.value = targetDb;
+      customIn.classList.add("hidden");
+      customIn.required = false;
+    } else if (targetDb && !allDbs.includes(targetDb)) {
+      dbSel.value = CUSTOM_VAL;
+      customIn.value = targetDb;
+      customIn.classList.remove("hidden");
+      customIn.required = true;
+    } else if (filtered.length) {
+      dbSel.value = filtered[0];
+      customIn.classList.add("hidden");
+      customIn.required = false;
+    } else {
+      dbSel.value = "";
+      customIn.classList.add("hidden");
+      customIn.required = false;
+    }
+  }
+
+  function renderSourceDirAndDb(targetDb = null) {
+    const dirSel = $("f-source-dir-select");
+    const allDbs = state.config.source_databases || [];
+    const dirs = collectedDirs();
+    const countByDir = new Map();
+    allDbs.forEach((p) => {
+      if (/^[a-zA-Z]:/.test(p) || p.startsWith("/")) return;
+      const d = dirOf(p);
+      countByDir.set(d, (countByDir.get(d) || 0) + 1);
+    });
+
+    const opts = [`<option value="${ALL_DIRS_VAL}">${esc(`${t("def.all_dirs")} (${allDbs.length})`)}</option>`];
+    dirs.forEach((d) => {
+      const cnt = countByDir.get(d) || 0;
+      const suffix = cnt > 0 ? ` (${cnt})` : "";
+      opts.push(`<option value="${esc(d)}">${esc(`${formatDirLabel(d)}${suffix}`)}</option>`);
+    });
+    dirSel.innerHTML = opts.join("");
+
+    const desired = targetDb || allDbs[0] || state.config.default_source_db || "";
+    if (desired && allDbs.includes(desired) && !/^[a-zA-Z]:/.test(desired) && !desired.startsWith("/")) {
+      const d = dirOf(desired);
+      dirSel.value = dirs.includes(d) ? d : ALL_DIRS_VAL;
+    } else {
+      dirSel.value = ALL_DIRS_VAL;
+    }
+    renderSourceDbForDir(dirSel.value, desired);
   }
 
   function renderDrawerTableSelect(tables, targetTable = null) {
@@ -335,7 +481,7 @@
   function updateTargetPreview() {
     const el = $("f-target-preview");
     if (!el) return;
-    const text = previewTargetPath($("f-name").value, $("f-target-dir").value, $("f-target-name").value);
+    const text = previewTargetPath($("f-name").value, currentTargetDir(), $("f-target-name").value);
     el.textContent = text;
     el.title = text;
   }
@@ -343,11 +489,13 @@
   function updateRenameWarning() {
     const editing = Boolean($("f-id").value);
     const orig = state.editingOriginal;
+    const curDir = currentTargetDir();
+    const origDir = orig ? (orig.target_dir === (state.config.sqlite_dir || "samp") ? "" : orig.target_dir) : "";
     const changed =
       editing &&
       orig &&
       ($("f-name").value.trim() !== orig.name ||
-        $("f-target-dir").value.trim() !== orig.target_dir ||
+        curDir !== origDir ||
         $("f-target-name").value.trim() !== orig.target_name);
     $("rename-warn").classList.toggle("show", Boolean(changed));
   }
@@ -395,7 +543,7 @@
     $("fb-val").value = "";
     $("f-filter").value = item.filter || "";
     $("f-target-table").value = item.target_table || "";
-    renderSourceDbSelect($("f-source-db-select"), item.source_database || state.config.default_source_db, true);
+    renderSourceDirAndDb(item.source_database || (state.config.source_databases || [])[0] || state.config.default_source_db);
     renderItemsStrip();
     const presetFields = autoSelectNumeric ? null : item.fields && item.fields.length ? item.fields : null;
     await loadDrawerTables(item.source_table || null, presetFields, autoSelectNumeric || !item.fields?.length);
@@ -595,6 +743,12 @@
   }
 
   async function openDrawer(mode, def = null) {
+    try {
+      state.config = await api("/api/config");
+      renderMetrics();
+    } catch {
+      // 忽略网络瞬断，沿用当前缓存目录
+    }
     $("f-id").value = mode === "edit" && def ? String(def.id) : "";
     state.editingOriginal =
       mode === "edit" && def
@@ -611,11 +765,12 @@
     $("f-name-hint").textContent = "";
     $("f-name").classList.remove("is-invalid");
 
+    const defaultSrcDb = (state.config.source_databases || [])[0] || state.config.default_source_db || "";
     const buildDraftItems = (srcDef) => {
       if (srcDef?.items?.length) {
         return srcDef.items.map((it, idx) => ({
           item_id: it.item_id || `i${idx + 1}`,
-          source_database: it.source_database || srcDef.source_database || state.config.default_source_db,
+          source_database: it.source_database || srcDef.source_database || defaultSrcDb,
           source_table: it.source_table || "",
           target_table: it.target_table || "",
           fields: [...(it.fields || [])],
@@ -626,7 +781,7 @@
         return [
           {
             item_id: "i1",
-            source_database: srcDef.source_database || state.config.default_source_db,
+            source_database: srcDef.source_database || defaultSrcDb,
             source_table: srcDef.source_table || "",
             target_table: "",
             fields: [...(srcDef.fields || [])],
@@ -637,7 +792,7 @@
       return [
         {
           item_id: "i1",
-          source_database: state.config.default_source_db || (state.config.source_databases || [])[0] || "",
+          source_database: defaultSrcDb,
           source_table: "",
           target_table: "",
           fields: [],
@@ -650,7 +805,7 @@
       $("drawer-title").textContent = t("def.drawer_edit", { name: def.samp_name });
       $("f-name").value = def.samp_name;
       $("f-interval").value = def.interval_seconds;
-      $("f-target-dir").value = def.target_dir || "";
+      renderTargetDirSelect($("f-target-dir-select"), def.target_dir || "", true);
       $("f-target-name").value = def.target_name || "";
       $("f-enabled").checked = Boolean(def.enabled);
       state.draftItems = buildDraftItems(def);
@@ -658,7 +813,7 @@
       $("drawer-title").textContent = t("def.drawer_copy");
       $("f-name").value = uniquePointName(def.samp_name);
       $("f-interval").value = def.interval_seconds;
-      $("f-target-dir").value = def.target_dir || "";
+      renderTargetDirSelect($("f-target-dir-select"), def.target_dir || "", true);
       $("f-target-name").value = "";
       $("f-enabled").checked = false;
       state.draftItems = buildDraftItems(def);
@@ -666,7 +821,7 @@
       $("drawer-title").textContent = t("def.drawer_new");
       $("f-name").value = "";
       $("f-interval").value = "60";
-      $("f-target-dir").value = "";
+      renderTargetDirSelect($("f-target-dir-select"), "", true);
       $("f-target-name").value = "";
       $("f-enabled").checked = true;
       state.draftItems = buildDraftItems(null);
@@ -716,11 +871,13 @@
     }
     const id = $("f-id").value;
     const orig = state.editingOriginal;
+    const curTargetDir = currentTargetDir();
+    const origDir = orig ? (orig.target_dir === (state.config.sqlite_dir || "samp") ? "" : orig.target_dir) : "";
     const targetChanged = Boolean(
       id &&
         orig &&
         ($("f-name").value.trim() !== orig.name ||
-          $("f-target-dir").value.trim() !== orig.target_dir ||
+          curTargetDir !== origDir ||
           $("f-target-name").value.trim() !== orig.target_name)
     );
     const primary = state.draftItems[0];
@@ -728,7 +885,7 @@
       name: $("f-name").value.trim(),
       source_database: primary.source_database,
       source_table: primary.source_table,
-      target_dir: $("f-target-dir").value.trim(),
+      target_dir: curTargetDir,
       target_name: $("f-target-name").value.trim(),
       fields: primary.fields,
       items: state.draftItems,
@@ -850,8 +1007,14 @@
   }
 
   async function openBatchWizard() {
-    renderSourceDbSelect($("bw-db"), state.config.default_source_db, false);
-    $("bw-target-dir").value = "";
+    try {
+      state.config = await api("/api/config");
+      renderMetrics();
+    } catch {
+      // 忽略瞬断
+    }
+    renderSourceDbSelect($("bw-db"), (state.config.source_databases || [])[0] || state.config.default_source_db, false);
+    renderTargetDirSelect($("bw-target-dir"), "", false);
     $("bw-prefix").value = "";
     $("bw-period").value = "60";
     $("bw-field-mode").value = "numeric";
@@ -1117,13 +1280,27 @@
       if (tab) switchDraftItem(Number(tab.dataset.itemIdx));
     });
 
-    // 单点弹窗：源库/源表自动级联
+    // 单点弹窗：源目录 / 源库 / 源表自动级联
+    $("f-source-dir-select").addEventListener("change", (e) => {
+      renderSourceDbForDir(e.target.value, null);
+      const db = currentSourceDb();
+      if (db) {
+        loadDrawerTables(null, null, true);
+      } else {
+        state.drawerTables = [];
+        state.sourceData = null;
+        renderDrawerTableSelect([], null);
+        $("f-fields").innerHTML = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
+        $("preview-meta").textContent = t("empty.dash");
+        $("preview-wrap").innerHTML = "";
+      }
+    });
     $("f-source-db-select").addEventListener("change", (e) => {
       const isCustom = e.target.value === CUSTOM_VAL;
       $("f-source-db-custom").classList.toggle("hidden", !isCustom);
       $("f-source-db-custom").required = isCustom;
-      if (!isCustom) loadDrawerTables(null, null, true);
-      else $("f-source-db-custom").focus();
+      if (!isCustom && e.target.value) loadDrawerTables(null, null, true);
+      else if (isCustom) $("f-source-db-custom").focus();
     });
     $("f-source-table-select").addEventListener("change", (e) => {
       const isCustom = e.target.value === CUSTOM_VAL;
@@ -1203,7 +1380,14 @@
       updateRenameWarning();
       validateNameInput();
     });
-    $("f-target-dir").addEventListener("input", () => {
+    $("f-target-dir-select").addEventListener("change", (e) => {
+      const isCustom = e.target.value === CUSTOM_VAL;
+      $("f-target-dir-custom").classList.toggle("hidden", !isCustom);
+      if (isCustom) $("f-target-dir-custom").focus();
+      updateTargetPreview();
+      updateRenameWarning();
+    });
+    $("f-target-dir-custom").addEventListener("input", () => {
       updateTargetPreview();
       updateRenameWarning();
     });
@@ -1267,7 +1451,14 @@
       renderMetrics();
       renderTable();
       renderBatchWizardTable();
-      if ($("drawer-backdrop").classList.contains("open")) renderItemsStrip();
+      if ($("drawer-backdrop").classList.contains("open")) {
+        renderTargetDirSelect($("f-target-dir-select"), currentTargetDir(), true);
+        renderSourceDirAndDb(currentSourceDb());
+        renderItemsStrip();
+      }
+      if ($("batch-backdrop").classList.contains("open")) {
+        renderTargetDirSelect($("bw-target-dir"), $("bw-target-dir").value, false);
+      }
     });
   }
 

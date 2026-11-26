@@ -849,6 +849,41 @@ def test_multi_item_single_db_multi_table_crud_and_query(tmp_path):
         assert del1.status_code == 400
 
 
+def test_multilevel_directory_scan_for_target_and_source_dropdowns(tmp_path):
+    root = tmp_path / "workspace"
+    deep_src = root / "rt" / "area1" / "station2"
+    deep_src.mkdir(parents=True)
+    (root / "archive" / "2026" / "grid").mkdir(parents=True)
+    (root / ".hidden_dir").mkdir(parents=True)
+    (root / "node_modules" / "pkg").mkdir(parents=True)
+    db_file = deep_src / "scada.db"
+    with closing(sqlite3.connect(db_file)) as conn:
+        conn.execute("CREATE TABLE bus (id INTEGER PRIMARY KEY, kv REAL)")
+
+    app = create_app(
+        definition_db="samp/samp_define.db",
+        source_db="source.db",
+        result_dir="samp",
+        enable_scheduler=False,
+        root_dir=root,
+    )
+    with TestClient(app) as client:
+        cfg = client.get("/api/config").json()
+        dirs = cfg["directories"]
+        assert "." in dirs
+        assert "rt" in dirs
+        assert "rt/area1" in dirs
+        assert "rt/area1/station2" in dirs
+        assert "archive/2026/grid" in dirs
+        assert ".hidden_dir" not in dirs
+        assert "node_modules" not in dirs
+        # 磁盘上真实存在的深层 .db 排在不存在的默认 source.db 之前
+        assert cfg["source_databases"][0] == "rt/area1/station2/scada.db"
+        assert "archive/2026/grid" in cfg["target_dirs"]
+        assert "rt/area1/station2" in cfg["target_dirs"]
+
+
+
 
 
 

@@ -108,6 +108,7 @@ def create_app(
             "scheduler_enabled": bool(enable_scheduler),
             "align": bool(align),
             "workers": int(workers),
+            "directories": store.list_directories(),
             "source_databases": store.list_source_databases(),
             "target_dirs": store.list_target_dirs(),
         }
@@ -363,6 +364,7 @@ def create_app(
     def source_databases():
         return {
             "root_dir": store.root_dir.as_posix(),
+            "directories": store.list_directories(),
             "databases": store.list_source_databases(),
             "default": store.to_relative_path(store.default_source_db),
         }
