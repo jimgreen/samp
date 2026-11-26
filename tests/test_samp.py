@@ -857,8 +857,11 @@ def test_multilevel_directory_scan_for_target_and_source_dropdowns(tmp_path):
     (root / ".hidden_dir").mkdir(parents=True)
     (root / "node_modules" / "pkg").mkdir(parents=True)
     db_file = deep_src / "scada.db"
+    s3_file = deep_src / "legacy.sqlite3"
     with closing(sqlite3.connect(db_file)) as conn:
         conn.execute("CREATE TABLE bus (id INTEGER PRIMARY KEY, kv REAL)")
+    with closing(sqlite3.connect(s3_file)) as conn:
+        conn.execute("CREATE TABLE gen (id INTEGER PRIMARY KEY, mw REAL)")
 
     app = create_app(
         definition_db="samp/samp_define.db",
@@ -877,8 +880,11 @@ def test_multilevel_directory_scan_for_target_and_source_dropdowns(tmp_path):
         assert "archive/2026/grid" in dirs
         assert ".hidden_dir" not in dirs
         assert "node_modules" not in dirs
-        # 磁盘上真实存在的深层 .db 排在不存在的默认 source.db 之前
-        assert cfg["source_databases"][0] == "rt/area1/station2/scada.db"
+        # 磁盘上真实存在的深层 .db / .sqlite3 均被自动发现并排在不存在的默认 source.db 之前
+        assert set(cfg["source_databases"][:2]) == {
+            "rt/area1/station2/legacy.sqlite3",
+            "rt/area1/station2/scada.db",
+        }
         assert "archive/2026/grid" in cfg["target_dirs"]
         assert "rt/area1/station2" in cfg["target_dirs"]
 

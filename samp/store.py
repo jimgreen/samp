@@ -26,6 +26,7 @@ _CLAUSE_CMP = re.compile(
 _RESULT_KEYS = {"sample_time", "row_key"}
 _ALLOWED_AGGS = {"raw", "avg", "min", "max", "last"}
 _SKIP_SCAN_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", ".playwright-cli", "tmp_results"}
+_SOURCE_DB_SUFFIXES = {".db", ".sqlite3", ".sqlite"}
 ROOT_DIR = Path(os.getenv("SAMP_ROOT_DIR", r"D:\codex\workspace"))
 SQLITE_DIR = Path(os.getenv("SAMP_SQLITE_DIR", str(ROOT_DIR / "samp")))
 DEFAULT_DEFINITION_DB: Path = (
@@ -1053,7 +1054,7 @@ class Store:
         return self._validate_source_path(target)
 
     def _iter_db_files(self, base_dir: Path, max_depth: int = 6) -> Iterator[Path]:
-        """在指定目录下按有限深度递归扫描 .db 文件，跳过缓存与版本库目录。"""
+        """在指定目录下按有限深度递归扫描 SQLite 源库文件（.db/.sqlite3/.sqlite），跳过缓存与版本库目录。"""
         if not base_dir.exists() or not base_dir.is_dir():
             return
         stack: list[tuple[Path, int]] = [(base_dir, 0)]
@@ -1064,7 +1065,7 @@ class Store:
             except OSError:
                 continue
             for entry in entries:
-                if entry.is_file() and entry.suffix.lower() == ".db":
+                if entry.is_file() and not entry.name.startswith(".") and entry.suffix.lower() in _SOURCE_DB_SUFFIXES:
                     yield entry
                 elif entry.is_dir() and depth < max_depth:
                     name = entry.name

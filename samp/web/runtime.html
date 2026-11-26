@@ -7,7 +7,7 @@
   <script>
     (function(){
       var t = localStorage.getItem("samp_theme");
-      var ok = ["minimalist-light","precision-dark","sci-fi-cyan","sci-fi-purple","sci-fi-matrix"];
+      var ok = ["minimalist-light","precision-dark","bento-grid","glassmorphism","editorial","sci-fi-cyan","sci-fi-purple","sci-fi-matrix"];
       document.documentElement.setAttribute("data-theme", ok.indexOf(t) >= 0 ? t : "minimalist-light");
     })();
   </script>
@@ -52,6 +52,9 @@
       <select id="theme-select" class="select-ctrl ctrl-sm" data-i18n-title="theme.toggle">
         <option value="minimalist-light" data-i18n="theme.light">极简明亮</option>
         <option value="precision-dark" data-i18n="theme.dark">精密暗黑</option>
+        <option value="bento-grid" data-i18n="theme.bento">便当盒网格</option>
+        <option value="glassmorphism" data-i18n="theme.glass">毛玻璃拟态</option>
+        <option value="editorial" data-i18n="theme.editorial">编辑杂志</option>
         <option value="sci-fi-cyan" data-i18n="theme.cyan">科幻电光青</option>
         <option value="sci-fi-purple" data-i18n="theme.purple">科幻赛博紫</option>
         <option value="sci-fi-matrix" data-i18n="theme.matrix">科幻矩阵绿</option>

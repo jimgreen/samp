@@ -1,5 +1,5 @@
 /* 零外部依赖 Canvas 2D 交互式多量纲时序趋势图组件
-   - 全量适配 5 套主题（minimalist-light / precision-dark / sci-fi-cyan / sci-fi-purple / sci-fi-matrix）
+   - 全量适配 8 套官方主题（minimalist-light / precision-dark / bento-grid / glassmorphism / editorial / sci-fi-cyan / sci-fi-purple / sci-fi-matrix）
    - 遵循 scientific-dashboard 规范：无纯白描边、半透明胶囊浮标、单曲线克制渐变填充（12% -> 0%）、色盲友好序列色
    - 视图模式：shared（同轴） / normalized（0-100% 归一化，Tooltip 显示真实物理值） / stacked（分轨堆叠）
 */
@@ -20,6 +20,51 @@
       labelText: "#0F172A",
       laneBorder: "#E2E8F0",
       series: ["#2563EB", "#D97706", "#0D9488", "#DC2626", "#7C3AED", "#64748B", "#0284C7", "#EA580C"]
+    },
+    "bento-grid": {
+      bg: "#FFFFFF",
+      grid: "#E8E8ED",
+      axis: "#D2D2D7",
+      text: "#6E6E73",
+      crosshair: "#86868B",
+      pinned: "#0071E3",
+      selectionBg: "rgba(0, 113, 227, 0.14)",
+      selectionBorder: "#0071E3",
+      labelBg: "rgba(255, 255, 255, 0.96)",
+      labelBorder: "#D2D2D7",
+      labelText: "#1D1D1F",
+      laneBorder: "#E8E8ED",
+      series: ["#0071E3", "#FF9500", "#34C759", "#FF3B30", "#AF52DE", "#5856D6", "#32ADE6", "#FF2D55"]
+    },
+    "glassmorphism": {
+      bg: "#111A2E",
+      grid: "rgba(255, 255, 255, 0.08)",
+      axis: "rgba(255, 255, 255, 0.18)",
+      text: "#CBD5E1",
+      crosshair: "rgba(147, 197, 253, 0.72)",
+      pinned: "#60A5FA",
+      selectionBg: "rgba(96, 165, 250, 0.18)",
+      selectionBorder: "#60A5FA",
+      labelBg: "rgba(15, 23, 42, 0.94)",
+      labelBorder: "rgba(255, 255, 255, 0.22)",
+      labelText: "#F8FAFC",
+      laneBorder: "rgba(255, 255, 255, 0.12)",
+      series: ["#60A5FA", "#FBBF24", "#34D399", "#FB7185", "#C084FC", "#94A3B8", "#38BDF8", "#FB923C"]
+    },
+    "editorial": {
+      bg: "#FFFFFF",
+      grid: "#E4E4E7",
+      axis: "#D4D4D8",
+      text: "#52525B",
+      crosshair: "#71717A",
+      pinned: "#9F1239",
+      selectionBg: "rgba(159, 18, 57, 0.12)",
+      selectionBorder: "#9F1239",
+      labelBg: "rgba(250, 249, 246, 0.96)",
+      labelBorder: "#D4D4D8",
+      labelText: "#18181B",
+      laneBorder: "#E4E4E7",
+      series: ["#9F1239", "#1E3A8A", "#15803D", "#B45309", "#4C1D95", "#3F3F46", "#0F766E", "#9A3412"]
     },
     "precision-dark": {
       bg: "#111827",

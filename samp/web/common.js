@@ -35,6 +35,9 @@ const SUPPORTED_LANGS = ["zh-CN", "en-US", "ru-RU"];
 const SUPPORTED_THEMES = [
   "minimalist-light",
   "precision-dark",
+  "bento-grid",
+  "glassmorphism",
+  "editorial",
   "sci-fi-cyan",
   "sci-fi-purple",
   "sci-fi-matrix"

@@ -1,6 +1,8 @@
 /* ==========================================================================
    SAMP 工程工作台样式表（严格遵循 web-ui-design / style-presets / scientific-dashboard）
-   支持 5 套预设：minimalist-light / precision-dark / sci-fi-cyan / sci-fi-purple / sci-fi-matrix
+   支持全套 8 套官方预设：
+   minimalist-light / precision-dark / bento-grid / glassmorphism / editorial /
+   sci-fi-cyan / sci-fi-purple / sci-fi-matrix
    ========================================================================== */
 
 :root,
@@ -38,7 +40,116 @@
   --scrollbar-thumb: #CBD5E1;
   --canvas-grid: none;
   --font-sans: "Inter", "Segoe UI", "Roboto", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+  --font-heading: var(--font-sans);
   --font-mono: "JetBrains Mono", "Fira Code", Consolas, ui-monospace, monospace;
+}
+
+[data-theme="bento-grid"] {
+  color-scheme: light;
+  --bg-canvas: #F5F5F7;
+  --bg-surface: #FFFFFF;
+  --bg-subtle: #EBEBF0;
+  --bg-hover: #EBF4FF;
+  --bg-selected: rgba(0, 113, 227, 0.10);
+  --table-stripe: #FAFAFC;
+  --table-hover: #F0F6FF;
+  --text-primary: #1D1D1F;
+  --text-secondary: #515154;
+  --text-tertiary: #6E6E73;
+  --accent: #0071E3;
+  --accent-hover: #0077ED;
+  --accent-soft: rgba(0, 113, 227, 0.11);
+  --accent-contrast: #FFFFFF;
+  --ok: #059669;
+  --ok-soft: rgba(5, 150, 105, 0.12);
+  --warn: #D97706;
+  --warn-soft: rgba(217, 119, 6, 0.13);
+  --danger: #DC2626;
+  --danger-soft: rgba(220, 38, 38, 0.11);
+  --border-color: rgba(0, 0, 0, 0.06);
+  --border-strong: rgba(0, 0, 0, 0.14);
+  --border: 1px solid var(--border-color);
+  --radius-card: 16px;
+  --radius-btn: 9999px;
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.04);
+  --shadow-overlay: 0 18px 42px rgba(0, 0, 0, 0.14);
+  --backdrop: rgba(29, 29, 31, 0.36);
+  --scrollbar-track: #EBEBF0;
+  --scrollbar-thumb: #C7C7CC;
+  --canvas-grid: none;
+}
+
+[data-theme="glassmorphism"] {
+  color-scheme: dark;
+  --bg-canvas: #0B1220;
+  --bg-surface: rgba(255, 255, 255, 0.07);
+  --bg-subtle: rgba(255, 255, 255, 0.11);
+  --bg-hover: rgba(96, 165, 250, 0.16);
+  --bg-selected: rgba(96, 165, 250, 0.20);
+  --table-stripe: rgba(255, 255, 255, 0.035);
+  --table-hover: rgba(96, 165, 250, 0.14);
+  --text-primary: #F8FAFC;
+  --text-secondary: #CBD5E1;
+  --text-tertiary: #94A3B8;
+  --accent: #60A5FA;
+  --accent-hover: #3B82F6;
+  --accent-soft: rgba(96, 165, 250, 0.18);
+  --accent-contrast: #071324;
+  --ok: #34D399;
+  --ok-soft: rgba(52, 211, 153, 0.16);
+  --warn: #FBBF24;
+  --warn-soft: rgba(251, 191, 36, 0.16);
+  --danger: #FB7185;
+  --danger-soft: rgba(251, 113, 133, 0.18);
+  --border-color: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.24);
+  --border: 1px solid var(--border-color);
+  --radius-card: 14px;
+  --radius-btn: 8px;
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.28);
+  --shadow-overlay: 0 18px 48px rgba(0, 0, 0, 0.56);
+  --backdrop: rgba(6, 10, 22, 0.62);
+  --scrollbar-track: rgba(15, 23, 42, 0.72);
+  --scrollbar-thumb: rgba(148, 163, 184, 0.38);
+  --canvas-grid: radial-gradient(circle at 14% 18%, rgba(59, 130, 246, 0.24) 0%, transparent 45%),
+    radial-gradient(circle at 86% 82%, rgba(99, 102, 241, 0.18) 0%, transparent 45%),
+    linear-gradient(135deg, #1E293B 0%, #0F172A 58%, #090D16 100%);
+}
+
+[data-theme="editorial"] {
+  color-scheme: light;
+  --bg-canvas: #FAF9F6;
+  --bg-surface: #FFFFFF;
+  --bg-subtle: #F4F3EE;
+  --bg-hover: #F7F1F3;
+  --bg-selected: rgba(159, 18, 57, 0.09);
+  --table-stripe: #FCFBFA;
+  --table-hover: #F8F3F4;
+  --text-primary: #18181B;
+  --text-secondary: #52525B;
+  --text-tertiary: #71717A;
+  --accent: #9F1239;
+  --accent-hover: #881337;
+  --accent-soft: rgba(159, 18, 57, 0.10);
+  --accent-contrast: #FFFFFF;
+  --ok: #15803D;
+  --ok-soft: rgba(21, 128, 61, 0.11);
+  --warn: #B45309;
+  --warn-soft: rgba(180, 83, 9, 0.12);
+  --danger: #B91C1C;
+  --danger-soft: rgba(185, 28, 28, 0.10);
+  --border-color: #E4E4E7;
+  --border-strong: #D4D4D8;
+  --border: 1px solid var(--border-color);
+  --radius-card: 2px;
+  --radius-btn: 2px;
+  --shadow-card: none;
+  --shadow-overlay: 0 12px 30px rgba(24, 24, 27, 0.16);
+  --backdrop: rgba(24, 24, 27, 0.40);
+  --scrollbar-track: #F4F3EE;
+  --scrollbar-thumb: #D4D4D8;
+  --canvas-grid: none;
+  --font-heading: "Georgia", "Noto Serif SC", "Songti SC", "SimSun", serif;
 }
 
 [data-theme="precision-dark"] {
@@ -222,6 +333,97 @@ body {
 select option {
   background: var(--bg-surface);
   color: var(--text-primary);
+}
+
+/* 毛玻璃拟态专属材质增强（背景全屏弥散 + 面板磨砂 + 浮层/弹窗/表头高不透明度防透字） */
+[data-theme="glassmorphism"],
+[data-theme="glassmorphism"] body {
+  background-size: cover;
+  background-attachment: fixed;
+}
+
+[data-theme="glassmorphism"] .sidebar,
+[data-theme="glassmorphism"] .topbar,
+[data-theme="glassmorphism"] .metric-strip,
+[data-theme="glassmorphism"] .panel {
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+}
+
+[data-theme="glassmorphism"] .drawer,
+[data-theme="glassmorphism"] .modal,
+[data-theme="glassmorphism"] .tree-popover,
+[data-theme="glassmorphism"] .multi-menu,
+[data-theme="glassmorphism"] .toast {
+  background: rgba(15, 23, 42, 0.90);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+}
+
+[data-theme="glassmorphism"] .data-table th,
+[data-theme="glassmorphism"] .data-table td.sticky-actions {
+  background: rgba(15, 23, 42, 0.86);
+}
+
+[data-theme="glassmorphism"] .data-table tbody tr td {
+  background: rgba(15, 23, 42, 0.34);
+}
+
+[data-theme="glassmorphism"] .data-table tbody tr:nth-child(even) td {
+  background: rgba(30, 41, 59, 0.42);
+}
+
+[data-theme="glassmorphism"] .data-table tbody tr:hover td {
+  background: rgba(59, 130, 246, 0.16);
+}
+
+[data-theme="glassmorphism"] select option {
+  background: #131D31;
+  color: #F8FAFC;
+}
+
+[data-theme="glassmorphism"] .ctrl,
+[data-theme="glassmorphism"] .select-ctrl,
+[data-theme="glassmorphism"] .tree-trigger,
+[data-theme="glassmorphism"] .btn:not(.primary):not(.ghost):not(.danger):not(.danger-solid) {
+  background: rgba(15, 23, 42, 0.56);
+}
+
+/* 便当盒网格风专属微调（胶囊控件保持规整内边距，弹窗/浮层保持柔和圆角） */
+[data-theme="bento-grid"] .workspace {
+  gap: 8px;
+  padding: 8px 10px 10px;
+}
+
+[data-theme="bento-grid"] .ctrl,
+[data-theme="bento-grid"] .select-ctrl,
+[data-theme="bento-grid"] .tree-trigger,
+[data-theme="bento-grid"] .btn:not(.icon-only) {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+[data-theme="bento-grid"] .tab-btn,
+[data-theme="bento-grid"] .btn.xs {
+  border-radius: 9999px;
+}
+
+/* 编辑杂志风专属排版（衬线体标题与克制直角纸张线条） */
+[data-theme="editorial"] .page-heading,
+[data-theme="editorial"] .brand,
+[data-theme="editorial"] .drawer-head h2,
+[data-theme="editorial"] .modal-head {
+  font-family: var(--font-heading);
+  letter-spacing: 0.01em;
+}
+
+[data-theme="editorial"] .badge,
+[data-theme="editorial"] .tab-btn,
+[data-theme="editorial"] .btn.xs,
+[data-theme="editorial"] .field-pill,
+[data-theme="editorial"] .tree-row,
+[data-theme="editorial"] .item-tab {
+  border-radius: 2px;
 }
 
 .ico {
