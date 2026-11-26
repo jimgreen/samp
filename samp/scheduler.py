@@ -103,6 +103,8 @@ class SamplingScheduler:
             duration_ms = result.get("duration_ms", round((time.perf_counter() - started) * 1000.0, 2))
             with self._state_lock:
                 self._running.discard(samp_id)
+            tables = result.get("tables") or [result["table"]]
+            tbl_label = tables[0] if len(tables) == 1 else f"{tables[0]} (+{len(tables) - 1}表)"
             self.runtime_store.record_execution(
                 samp_id=samp_id,
                 samp_name=result.get("samp_name", f"#{samp_id}"),
@@ -111,7 +113,7 @@ class SamplingScheduler:
                 sampled_at=result["sampled_at"],
                 rows_written=result["rows_written"],
                 duration_ms=duration_ms,
-                message=f"{result['table']} (+{result['rows_written']})",
+                message=f"{tbl_label} (+{result['rows_written']})",
                 error=None,
             )
             return result

@@ -472,14 +472,20 @@ class Store:
 
             if not src_table or not fields:
                 raise ValueError(f"第 {idx + 1} 条采集项的 source_table 和 fields 不能为空")
-            if not _IDENT.match(src_table) or any(not _IDENT.match(f) for f in fields):
-                raise ValueError("表名与字段名只能包含字母、数字、下划线或中文")
+            if not _IDENT.match(src_table):
+                raise ValueError("表名只能包含字母、数字、下划线或中文")
             if src_table.lower() in REGISTRY_TABLES:
                 raise ValueError("不能使用 RTDB 内置结构表作为数据源")
-            if any(f.lower() in _RESULT_KEYS for f in fields):
-                raise ValueError("sample_time 和 row_key 是结果表保留字段，不能作为采样字段")
-            if len({f.lower() for f in fields}) != len(fields):
-                raise ValueError("同一采集项的采样字段名不能仅大小写不同")
+            if "*" in fields:
+                # 整表模式：["*"] 表示自动跟随源表全部合法业务列
+                fields = ["*"]
+            else:
+                if any(not _IDENT.match(f) for f in fields):
+                    raise ValueError("字段名只能包含字母、数字、下划线或中文")
+                if any(f.lower() in _RESULT_KEYS for f in fields):
+                    raise ValueError("sample_time 和 row_key 是结果表保留字段，不能作为采样字段")
+                if len({f.lower() for f in fields}) != len(fields):
+                    raise ValueError("同一采集项的采样字段名不能仅大小写不同")
             if not src_db:
                 raise ValueError("source_database 不能为空")
             self._validate_source_path(src_db)
@@ -1441,6 +1447,158 @@ class Store:
             raise ValueError("采样点名生成的结果表名不合法")
         return value
 
+    def _resolve_source_fields(
+        self,
+        source_database: str,
+        source_table: str,
+        configured_fields: list[str],
+    ) -> list[str]:
+        """解析采集项本次实际采样字段：若为 ['*'] 则动态读取源表全部合法业务列。"""
+        if configured_fields != ["*"]:
+            return list(configured_fields)
+        raw_cols = self.source_fields(source_database, source_table)
+        resolved: list[str] = []
+        seen_lower: set[str] = set()
+        for col in raw_cols:
+            low = col.lower()
+            if low in _RESULT_KEYS or not _IDENT.match(col) or low in seen_lower:
+                continue
+            seen_lower.add(low)
+            resolved.append(col)
+        if not resolved:
+            raise ValueError(f"源表没有可采样的业务字段: {source_database}:{source_table}")
+        return resolved
+
+    def _discover_item_fields(
+        self,
+        raw: sqlite3.Row,
+        item: dict[str, Any],
+        start: int | None = None,
+        end: int | None = None,
+    ) -> list[str]:
+        """解析查询/展示可用的真实字段清单：对 ['*'] 合并已落盘结果表列与当前源表业务列。"""
+        cols, _ = self._discover_item_schema(raw, item, start, end)
+        return cols
+
+    def _discover_item_schema(
+        self,
+        raw: sqlite3.Row,
+        item: dict[str, Any],
+        start: int | None = None,
+        end: int | None = None,
+    ) -> tuple[list[str], dict[str, str]]:
+        """解析采集项字段列表与列类型（INTEGER/REAL/TEXT），兼容 '*' 通配符与普通字段定义。"""
+        is_wild = item["fields"] == ["*"]
+        cols: list[str] = []
+        col_types: dict[str, str] = {}
+        seen_lower: set[str] = set()
+
+        def push(col: str, sql_type: str = "") -> None:
+            low = col.lower()
+            if low in _RESULT_KEYS or not _IDENT.match(col):
+                return
+            if low not in seen_lower:
+                seen_lower.add(low)
+                cols.append(col)
+                if sql_type:
+                    col_types[col] = sql_type
+            elif sql_type and col in col_types and not col_types[col]:
+                col_types[col] = sql_type
+
+        if not is_wild:
+            for f in item["fields"]:
+                push(f)
+
+        # 收集结果表列信息
+        targets: list[tuple[Path, str]] = []
+        if start is not None and end is not None:
+            targets = self._iter_targets_for_range(raw, start, end, "asc", item["item_id"])
+        else:
+            spec = self._spec_from_row(raw)
+            custom_table = item["target_table"]
+            for _, db_path in self._list_spec_result_files(spec):
+                targets.append((db_path, custom_table or db_path.stem))
+
+        for db_path, table in targets:
+            if not db_path.exists():
+                continue
+            try:
+                with self._connect_readonly(db_path) as conn:
+                    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                        continue
+                    for r in conn.execute(f"PRAGMA table_info({self._quote(table)})").fetchall():
+                        name = str(r[1])
+                        norm_type = _normalize_sql_type(str(r[2]))
+                        if is_wild:
+                            push(name, norm_type)
+                        elif name in cols and name not in col_types:
+                            col_types[name] = norm_type
+            except (sqlite3.Error, ValueError):
+                pass
+
+        # 合并当前源表列信息（未采样前或源表新增列时立即可见，并补齐列类型）
+        try:
+            src_db = self._source_database(item["source_database"] or self.default_source_db)
+            with self._connect_readonly(src_db) as conn:
+                info = conn.execute(f"PRAGMA table_info({self._source_table(item['source_table'])})").fetchall()
+                for r in info:
+                    name = str(r[1])
+                    norm_type = _normalize_sql_type(str(r[2]))
+                    if is_wild:
+                        push(name, norm_type)
+                    elif name in cols and name not in col_types:
+                        col_types[name] = norm_type
+        except (sqlite3.Error, ValueError, OSError):
+            pass
+
+        return cols, col_types
+
+    def resolve_definition_fields(self, samp_id: int, item_id: str | None = None) -> dict[str, Any]:
+        """返回采样点指定采集项解析后的真实可查字段列表与列类型（供查询页展开 '*' 与一键仅选数值列）。"""
+        raw = self._raw_definition(samp_id)
+        item = self._select_item(raw, item_id)
+        cols, col_types = self._discover_item_schema(raw, item)
+        numeric_fields = [c for c in cols if col_types.get(c) in ("INTEGER", "REAL")]
+        return {
+            "samp_id": samp_id,
+            "item_id": item["item_id"],
+            "is_wildcard": item["fields"] == ["*"],
+            "fields": cols,
+            "field_types": col_types,
+            "numeric_fields": numeric_fields,
+        }
+
+    def query_sample_times(
+        self,
+        samp_id: int,
+        start: int,
+        end: int,
+        limit: int = 200,
+        item_id: str | None = None,
+    ) -> dict[str, Any]:
+        """获取指定时间范围内已落盘的去重采样时刻（降序），供查询页按时刻查看整表快照。"""
+        safe_limit = max(1, min(int(limit), 2000))
+        raw = self._raw_definition(samp_id)
+        selected_item = self._select_item(raw, item_id)
+        found: set[int] = set()
+        for db_path, table in self._iter_targets_for_range(raw, start, end, "desc", selected_item["item_id"]):
+            if not db_path.exists():
+                continue
+            with self._connect_readonly(db_path) as conn:
+                if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                    continue
+                for row in conn.execute(
+                    f"SELECT DISTINCT sample_time FROM {self._quote(table)} WHERE sample_time BETWEEN ? AND ? ORDER BY sample_time DESC LIMIT ?",
+                    (start, end, safe_limit),
+                ).fetchall():
+                    found.add(int(row[0]))
+                    if len(found) >= safe_limit:
+                        break
+            if len(found) >= safe_limit:
+                break
+        times = sorted(found, reverse=True)[:safe_limit]
+        return {"item_id": selected_item["item_id"], "times": times, "total": len(times)}
+
     def run_sample(self, samp_id: int, sampled_at: int | None = None) -> dict[str, Any]:
         started = time.perf_counter()
         sampled_at = int(time.time() if sampled_at is None else sampled_at)
@@ -1452,16 +1610,17 @@ class Store:
         db_key = os.path.normcase(str(db_path.resolve()))
 
         # 先全部只读采样源数据，减少目标结果库写锁持有时长
-        prepared: list[tuple[dict[str, Any], list[tuple[str, dict[str, Any]]], dict[str, str]]] = []
+        prepared: list[tuple[dict[str, Any], list[str], list[tuple[str, dict[str, Any]]], dict[str, str]]] = []
         for item in items:
-            fields = list(item["fields"])
+            src_db = item["source_database"] or self.default_source_db
+            fields = self._resolve_source_fields(src_db, item["source_table"], list(item["fields"]))
             rows, field_types = self._read_source(
-                item["source_database"] or self.default_source_db,
+                src_db,
                 item["source_table"],
                 item["filter"],
                 fields,
             )
-            prepared.append((item, rows, field_types))
+            prepared.append((item, fields, rows, field_types))
 
         total_written = 0
         tables_written: list[str] = []
@@ -1469,8 +1628,7 @@ class Store:
 
         with self._db_lock(db_path), self._connect(db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            for item, rows, field_types in prepared:
-                fields = list(item["fields"])
+            for item, fields, rows, field_types in prepared:
                 table = item["target_table"] or default_table
                 table_sql = self._quote(table)
                 quoted_fields = [self._quote(field) for field in fields]
@@ -1529,6 +1687,7 @@ class Store:
                         "item_id": item["item_id"],
                         "source_table": item["source_table"],
                         "table": table,
+                        "fields": fields,
                         "rows_written": len(rows),
                     }
                 )
@@ -1587,7 +1746,8 @@ class Store:
         raw = self._raw_definition(samp_id)
         definition = self._public(raw, self.default_source_db)
         selected_item = self._select_item(raw, item_id)
-        selected = self._resolve_query_fields(selected_item["fields"], fields)
+        allowed_fields = self._discover_item_fields(raw, selected_item, start, end)
+        selected = self._resolve_query_fields(allowed_fields, fields)
         clean_keys = [str(k) for k in (row_keys or []) if str(k) != ""]
 
         rows: list[dict[str, Any]] = []
@@ -1704,7 +1864,8 @@ class Store:
         raw = self._raw_definition(samp_id)
         definition = self._public(raw, self.default_source_db)
         selected_item = self._select_item(raw, item_id)
-        selected = self._resolve_query_fields(selected_item["fields"], fields)
+        allowed_fields = self._discover_item_fields(raw, selected_item, start, end)
+        selected = self._resolve_query_fields(allowed_fields, fields)
         clean_keys = [str(k) for k in (row_keys or []) if str(k) != ""]
 
         # 统计命中点数，自动决定是否需要分桶降采样
@@ -1913,7 +2074,8 @@ class Store:
         raw = self._raw_definition(samp_id)
         definition = self._public(raw, self.default_source_db)
         selected_item = self._select_item(raw, item_id)
-        selected = self._resolve_query_fields(selected_item["fields"], fields)
+        allowed_fields = self._discover_item_fields(raw, selected_item, start, end)
+        selected = self._resolve_query_fields(allowed_fields, fields)
         clean_keys = [str(k) for k in (row_keys or []) if str(k) != ""]
         columns = ["sample_time", "row_key", *selected]
         dir_sql = "DESC" if order_norm == "desc" else "ASC"

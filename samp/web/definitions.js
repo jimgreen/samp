@@ -23,7 +23,16 @@
     // 批量建点向导状态
     bwTables: [],
     bwSelected: new Set(),
-    bwOverrides: {} // table -> { name, interval }
+    bwOverrides: {}, // table -> { name, interval }
+    // 整表采样双栏工作台状态
+    ts: {
+      tables: [],
+      selected: new Set(),
+      activeTable: null,
+      configs: {}, // table -> { name, interval, allFields, fields, filter }
+      inspect: null,
+      keyword: ""
+    }
   };
 
   /* ===================== 公共小工具 ===================== */
@@ -180,10 +189,18 @@
             ? ` <span class="badge ok" title="${esc(items.map((it) => `${it.source_table}→${it.target_table || t("def.item_default_table")}`).join("; "))}">${esc(t("def.item_count", { n: items.length }))}</span>`
             : "";
         const tablesStr = items.map((it) => it.source_table).join(", ");
+        const isSingleWild = items.length === 1 && (items[0].fields || []).includes("*");
         const fieldsStr =
           items.length > 1
-            ? items.map((it) => `${it.source_table}(${(it.fields || []).length})`).join(", ")
+            ? items
+                .map((it) => `${it.source_table}(${(it.fields || []).includes("*") ? "*" : (it.fields || []).length})`)
+                .join(", ")
+            : isSingleWild
+            ? t("def.all_fields_wild")
             : (d.fields || []).join(", ");
+        const fieldsCell = isSingleWild
+          ? `<span class="badge ok">${esc(t("def.all_fields_wild"))}</span>`
+          : esc(fieldsStr);
         const targetStr = d.target_preview || `samp/samp_${d.samp_name}_{year}.db`;
         const toggleTitle = d.enabled ? t("action.disable") : t("action.enable");
         return `
@@ -193,7 +210,7 @@
             <td class="mono cell-ellipsis-sm" title="${esc(tablesStr)}">${esc(tablesStr)}</td>
             <td class="mono cell-ellipsis" title="${esc(d.source_database)}">${esc(d.source_database)}</td>
             <td class="mono cell-ellipsis" title="${esc(targetStr)}">${esc(targetStr)}</td>
-            <td class="mono cell-ellipsis-sm" title="${esc(fieldsStr)}">${esc(fieldsStr)}</td>
+            <td class="mono cell-ellipsis-sm" title="${esc(fieldsStr)}">${fieldsCell}</td>
             <td class="cell-input">
               <input type="number" min="0" step="1" class="num-in inline-period" data-id="${d.id}" value="${esc(d.interval_seconds)}" title="${esc(t("def.label_interval"))}">
             </td>
@@ -275,6 +292,8 @@
   let targetDirTree = null;
   let sourceDirTree = null;
   let bwTargetDirTree = null;
+  let tsSourceDirTree = null;
+  let tsTargetDirTree = null;
 
   function closeAllDirTrees(except = null) {
     [...openDirTrees].forEach((picker) => {
@@ -823,9 +842,13 @@
     item.source_database = currentSourceDb() || item.source_database || state.config.default_source_db || "";
     item.source_table = currentSourceTable() || "";
     item.target_table = $("f-target-table").value.trim();
-    const checked = checkedFields($("f-fields"));
-    if (state.sourceData || checked.length) {
-      item.fields = checked;
+    if ($("f-all-fields")?.checked) {
+      item.fields = ["*"];
+    } else {
+      const checked = checkedFields($("f-fields"));
+      if (state.sourceData || checked.length) {
+        item.fields = checked;
+      }
     }
     item.filter = $("f-filter").value.trim();
   }
@@ -841,8 +864,8 @@
         const active = idx === state.activeItemIdx;
         const src = it.source_table || t("def.select_table");
         const tgt = it.target_table || (idx === 0 ? t("def.item_default_table") : src);
-        const fCount = (it.fields || []).length;
-        const label = `#${idx + 1} ${src} → ${tgt} (${fCount})`;
+        const fTag = (it.fields || []).includes("*") ? "*" : (it.fields || []).length;
+        const label = `#${idx + 1} ${src} → ${tgt} (${fTag})`;
         const delBtn = canDel
           ? `<button type="button" class="item-tab-del" data-item-del="${idx}" title="${esc(t("def.item_remove"))}">&times;</button>`
           : "";
@@ -856,14 +879,17 @@
     const item = state.draftItems[state.activeItemIdx];
     if (!item) return;
     state.sourceData = null;
+    const isWild = (item.fields || []).includes("*");
+    $("f-all-fields").checked = isWild;
+    $("f-fields").classList.toggle("ts-fields-locked", isWild);
     $("f-field-search").value = "";
     $("fb-val").value = "";
     $("f-filter").value = item.filter || "";
     $("f-target-table").value = item.target_table || "";
     renderSourceDirAndDb(item.source_database || (state.config.source_databases || [])[0] || state.config.default_source_db);
     renderItemsStrip();
-    const presetFields = autoSelectNumeric ? null : item.fields && item.fields.length ? item.fields : null;
-    await loadDrawerTables(item.source_table || null, presetFields, autoSelectNumeric || !item.fields?.length);
+    const presetFields = isWild ? null : autoSelectNumeric ? null : item.fields && item.fields.length ? item.fields : null;
+    await loadDrawerTables(item.source_table || null, presetFields, isWild ? false : autoSelectNumeric || !item.fields?.length);
     syncActiveItemFromForm();
     renderItemsStrip();
   }
@@ -1027,7 +1053,9 @@
       const data = await api(url);
       state.sourceData = data;
       let targetChecked;
-      if (presetFields !== null) {
+      if ($("f-all-fields")?.checked) {
+        targetChecked = (data.fields || []).filter((f) => f !== "row_key" && f !== "sample_time");
+      } else if (presetFields !== null) {
         targetChecked = presetFields;
       } else if (autoSelectNumeric) {
         targetChecked = data.numeric_fields?.length
@@ -1037,6 +1065,7 @@
         targetChecked = checkedFields($("f-fields"));
       }
       renderDrawerFields(targetChecked);
+      $("f-fields").classList.toggle("ts-fields-locked", Boolean($("f-all-fields")?.checked));
       renderFilterBuilderOptions(data);
       renderPreview(data);
 
@@ -1383,6 +1412,361 @@
     }
   }
 
+  /* ===================== 整表采样居中双栏工作台 ===================== */
+  function tsEnsureConfig(tb) {
+    const existing = state.ts.configs[tb.table];
+    if (existing) return existing;
+    const cfg = {
+      name: tb.table,
+      interval: Math.max(0, Number($("ts-default-period").value || 60)),
+      allFields: true,
+      fields: [...(tb.fields || [])],
+      filter: ""
+    };
+    state.ts.configs[tb.table] = cfg;
+    return cfg;
+  }
+
+  function tsSyncActiveConfigFromForm() {
+    const tbl = state.ts.activeTable;
+    if (!tbl || !state.ts.configs[tbl]) return;
+    const cfg = state.ts.configs[tbl];
+    cfg.name = $("ts-point-name").value.trim() || tbl;
+    cfg.interval = Math.max(0, Number($("ts-period").value) || 0);
+    cfg.allFields = $("ts-all-fields").checked;
+    if (!cfg.allFields) {
+      const checked = checkedFields($("ts-fields"));
+      if (state.ts.inspect || checked.length) cfg.fields = checked;
+    }
+    cfg.filter = $("ts-filter").value.trim();
+  }
+
+  function tsUpdateFooter() {
+    const cnt = state.ts.selected.size;
+    $("ts-foot-meta").textContent = t("def.ts_selected_cnt", { n: cnt });
+    $("ts-save").disabled = cnt === 0;
+    $("ts-save-run").disabled = cnt === 0;
+    $("ts-save").textContent = t("def.ts_save", { n: cnt });
+    $("ts-save-run").textContent = t("def.ts_save_run", { n: cnt });
+  }
+
+  function tsRenderTableList() {
+    const listEl = $("ts-table-list");
+    const kw = state.ts.keyword.trim().toLowerCase();
+    const visible = state.ts.tables.filter(
+      (tb) => !kw || tb.table.toLowerCase().includes(kw) || String(tb.chn_name || "").toLowerCase().includes(kw)
+    );
+    if (!visible.length) {
+      listEl.innerHTML = `<div class="empty-cell">${esc(t("empty.dash"))}</div>`;
+      $("ts-check-all").checked = false;
+      tsUpdateFooter();
+      return;
+    }
+    $("ts-check-all").checked = visible.every((tb) => state.ts.selected.has(tb.table));
+    listEl.innerHTML = visible
+      .map((tb) => {
+        const cfg = tsEnsureConfig(tb);
+        const checked = state.ts.selected.has(tb.table);
+        const active = state.ts.activeTable === tb.table;
+        const colBadge = cfg.allFields
+          ? `<span class="badge ok">${esc(t("def.all_fields_wild"))}</span>`
+          : `<span class="badge muted">${esc(t("def.ts_cols_n", { n: (cfg.fields || []).length }))}</span>`;
+        const filterDot = cfg.filter ? `<span class="dot ok" title="${esc(cfg.filter)}"></span>` : "";
+        const sub = tb.chn_name ? `${tb.chn_name} · ${tb.row_count}` : `${tb.row_count}`;
+        return `
+          <div class="ts-table-row ${active ? "active" : ""}" data-ts-table="${esc(tb.table)}">
+            <input type="checkbox" class="ts-check" data-ts-check="${esc(tb.table)}" ${checked ? "checked" : ""}>
+            <div class="ts-table-main">
+              <div class="ts-table-name" title="${esc(tb.table)}">${esc(tb.table)}</div>
+              <div class="ts-table-sub" title="${esc(sub)}">${esc(sub)}</div>
+            </div>
+            <div class="ts-table-meta">${filterDot}${colBadge}</div>
+          </div>`;
+      })
+      .join("");
+    tsUpdateFooter();
+  }
+
+  function tsRenderFields(presetFields = null) {
+    const data = state.ts.inspect;
+    if (!data) {
+      $("ts-fields").innerHTML = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
+      return;
+    }
+    const isWild = $("ts-all-fields").checked;
+    const allBiz = (data.fields || []).filter((f) => f !== "row_key" && f !== "sample_time");
+    const chosen = isWild ? allBiz : presetFields !== null ? presetFields : checkedFields($("ts-fields"));
+    renderFieldChecks(
+      $("ts-fields"),
+      data.fields || [],
+      chosen,
+      data.field_types || {},
+      data.field_labels || {},
+      $("ts-field-search").value
+    );
+    $("ts-fields").classList.toggle("ts-fields-locked", isWild);
+  }
+
+  function tsRenderPreview(data) {
+    $("ts-preview-meta").textContent = t("def.preview_meta", {
+      matched: data.matched_rows ?? data.rows.length,
+      total: data.total_rows ?? data.rows.length,
+      cols: (data.fields || []).length
+    });
+    if (!data.rows || !data.rows.length) {
+      $("ts-preview-wrap").innerHTML = `<div class="empty-cell">${esc(t("empty.dash"))}</div>`;
+      return;
+    }
+    const cols = data.fields || [];
+    const labels = data.field_labels || {};
+    $("ts-preview-wrap").innerHTML = `
+      <table class="data-table">
+        <thead><tr>${cols.map((c) => `<th title="${esc(labels[c] || c)}">${esc(c)}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${data.rows
+            .map(
+              (row) =>
+                `<tr>${cols
+                  .map((c) => {
+                    const val = row[c];
+                    const canClick = val !== null && val !== undefined && val !== "";
+                    return `<td class="mono ${canClick ? "clickable-cell" : ""}" data-pcol="${esc(c)}" data-pval="${esc(val ?? "")}" title="${esc(t("def.click_cell_filter"))}">${esc(val)}</td>`;
+                  })
+                  .join("")}</tr>`
+            )
+            .join("")}
+        </tbody>
+      </table>`;
+  }
+
+  function tsFormatCondition(field, rawVal, op) {
+    const fType = state.ts.inspect?.field_types?.[field] || "REAL";
+    if (op === "in") {
+      const cleaned = rawVal.trim().replace(/^\(|\)$/g, "");
+      return `${field} in (${cleaned})`;
+    }
+    const text = String(rawVal ?? "").trim();
+    if (fType === "TEXT" && !(text.startsWith("'") && text.endsWith("'"))) {
+      return `${field}${op}'${text}'`;
+    }
+    return `${field}${op}${text}`;
+  }
+
+  function tsAppendFilter(clause) {
+    const input = $("ts-filter");
+    const curr = input.value.trim();
+    if (!clause) return;
+    if (!curr || !curr.toLowerCase().includes(clause.toLowerCase())) {
+      input.value = curr ? `${curr} and ${clause}` : clause;
+    }
+    tsSyncActiveConfigFromForm();
+    tsRenderTableList();
+    tsInspectActive(false);
+  }
+
+  async function tsInspectActive(resetFieldsFromConfig = true) {
+    const db = $("ts-source-db").value;
+    const tbl = state.ts.activeTable;
+    if (!db || !tbl) return;
+    const filter = $("ts-filter").value.trim();
+    try {
+      const url = `/api/source/inspect?source_database=${encodeURIComponent(db)}&source_table=${encodeURIComponent(tbl)}&filter=${encodeURIComponent(filter)}`;
+      const data = await api(url);
+      state.ts.inspect = data;
+      const cfg = state.ts.configs[tbl];
+      const preset = resetFieldsFromConfig && cfg ? cfg.fields : null;
+      tsRenderFields(preset);
+      const fbSel = $("ts-fb-field");
+      const labels = data.field_labels || {};
+      fbSel.innerHTML = (data.fields || [])
+        .map((c) => `<option value="${esc(c)}">${esc(labels[c] ? `${c} · ${labels[c]}` : c)}</option>`)
+        .join("");
+      const vals = data.sample_values?.[fbSel.value] || [];
+      $("ts-fb-val-list").innerHTML = vals.map((v) => `<option value="${esc(v)}"></option>`).join("");
+      tsRenderPreview(data);
+    } catch (err) {
+      $("ts-preview-meta").textContent = err.message;
+      $("ts-preview-wrap").innerHTML = "";
+    }
+  }
+
+  async function tsSelectTable(tableName) {
+    tsSyncActiveConfigFromForm();
+    const tb = state.ts.tables.find((x) => x.table === tableName);
+    if (!tb) return;
+    state.ts.activeTable = tableName;
+    const cfg = tsEnsureConfig(tb);
+    $("ts-point-name").value = cfg.name;
+    $("ts-period").value = cfg.interval;
+    $("ts-all-fields").checked = cfg.allFields;
+    $("ts-field-search").value = "";
+    $("ts-fb-val").value = "";
+    $("ts-filter").value = cfg.filter || "";
+    tsRenderTableList();
+    await tsInspectActive(true);
+  }
+
+  function tsRenderSourceDbForDir(selectedDir, targetDb = null) {
+    const sel = $("ts-source-db");
+    const allDbs = state.config.source_databases || [];
+    const filtered =
+      selectedDir === ALL_DIRS_VAL
+        ? allDbs
+        : allDbs.filter((p) => !/^[a-zA-Z]:/.test(p) && !p.startsWith("/") && dirOf(p) === selectedDir);
+    if (!filtered.length) {
+      sel.innerHTML = `<option value="" disabled>${esc(t("def.no_db_in_dir"))}</option>`;
+      sel.value = "";
+      return;
+    }
+    sel.innerHTML = filtered
+      .map((p) => `<option value="${esc(p)}" title="${esc(p)}">${esc(selectedDir === ALL_DIRS_VAL ? p : baseOf(p))}</option>`)
+      .join("");
+    sel.value = targetDb && filtered.includes(targetDb) ? targetDb : filtered[0];
+  }
+
+  async function tsLoadTables() {
+    const db = $("ts-source-db").value;
+    state.ts.tables = [];
+    state.ts.selected.clear();
+    state.ts.configs = {};
+    state.ts.activeTable = null;
+    state.ts.inspect = null;
+    if (!db) {
+      tsRenderTableList();
+      $("ts-fields").innerHTML = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
+      $("ts-preview-meta").textContent = t("empty.dash");
+      $("ts-preview-wrap").innerHTML = "";
+      return;
+    }
+    try {
+      const summary = await api(`/api/source/tables/summary?source_database=${encodeURIComponent(db)}`);
+      state.ts.tables = summary.tables || [];
+      state.ts.tables.forEach((tb) => tsEnsureConfig(tb));
+      if (state.ts.tables.length) {
+        // 默认选中第一张表方便立刻单表整表采样，也可在左栏再多选
+        const first = state.ts.tables[0];
+        state.ts.selected.add(first.table);
+        await tsSelectTable(first.table);
+      } else {
+        tsRenderTableList();
+        $("ts-fields").innerHTML = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
+        $("ts-preview-meta").textContent = t("empty.dash");
+        $("ts-preview-wrap").innerHTML = "";
+      }
+    } catch (err) {
+      tsRenderTableList();
+      toast(err.message, "error");
+    }
+  }
+
+  async function openTableSample() {
+    try {
+      state.config = await api("/api/config");
+      renderMetrics();
+    } catch {}
+    const allDbs = state.config.source_databases || [];
+    const dirs = collectedDirs();
+    const countByDir = new Map();
+    allDbs.forEach((p) => {
+      if (/^[a-zA-Z]:/.test(p) || p.startsWith("/")) return;
+      const d = dirOf(p);
+      countByDir.set(d, (countByDir.get(d) || 0) + 1);
+    });
+    const firstDb = allDbs[0] || state.config.default_source_db || "";
+    const initDir = firstDb && !/^[a-zA-Z]:/.test(firstDb) && !firstDb.startsWith("/") && dirs.includes(dirOf(firstDb)) ? dirOf(firstDb) : ALL_DIRS_VAL;
+    tsSourceDirTree.setData(dirs, countByDir, allDbs.length, state.config.sqlite_dir || "samp");
+    tsSourceDirTree.setValue(initDir, true);
+    tsRenderSourceDbForDir(initDir, firstDb);
+    renderTargetDirTree(tsTargetDirTree, "", false);
+
+    $("ts-mode").value = "per_table";
+    $("ts-bundle-name").value = "";
+    $("ts-bundle-name").classList.add("hidden");
+    $("ts-default-period").value = "60";
+    $("ts-conflict").value = "overwrite";
+    $("ts-enabled").checked = true;
+    $("ts-table-search").value = "";
+    state.ts.keyword = "";
+    $("ts-backdrop").classList.add("open");
+    await tsLoadTables();
+  }
+
+  function closeTableSample() {
+    closeAllDirTrees();
+    $("ts-backdrop").classList.remove("open");
+  }
+
+  async function submitTableSample(sampleNowFlag) {
+    tsSyncActiveConfigFromForm();
+    const db = $("ts-source-db").value;
+    if (!db) {
+      toast(t("def.toast_need_source"), "error");
+      return;
+    }
+    const mode = $("ts-mode").value;
+    const bundleName = $("ts-bundle-name").value.trim();
+    if (mode === "single_db" && !bundleName) {
+      toast(t("def.ts_need_bundle"), "error");
+      $("ts-bundle-name").focus();
+      return;
+    }
+    const selectedTables = state.ts.tables.filter((tb) => state.ts.selected.has(tb.table));
+    if (!selectedTables.length) {
+      toast(t("def.toast_need_tables"), "error");
+      return;
+    }
+    const enabled = $("ts-enabled").checked;
+    const tablesPayload = [];
+    for (const tb of selectedTables) {
+      const cfg = tsEnsureConfig(tb);
+      const fields = cfg.allFields ? ["*"] : cfg.fields || [];
+      if (!fields.length) {
+        await tsSelectTable(tb.table);
+        toast(t("def.toast_need_fields"), "error");
+        return;
+      }
+      tablesPayload.push({
+        source_table: tb.table,
+        name: cfg.name || tb.table,
+        target_table: mode === "single_db" ? tb.table : "",
+        fields,
+        filter: cfg.filter || "",
+        interval_seconds: Math.max(0, Number(cfg.interval) || 0),
+        enabled
+      });
+    }
+
+    try {
+      const res = await api("/api/table-sample", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source_database: db,
+          target_dir: (tsTargetDirTree ? tsTargetDirTree.getValue() : "").trim(),
+          target_mode: mode,
+          bundle_name: bundleName,
+          conflict_mode: $("ts-conflict").value,
+          sample_now: Boolean(sampleNowFlag),
+          tables: tablesPayload
+        })
+      });
+      const errCount = (res.errors || []).length + (res.sample_errors || []).length;
+      toast(
+        t("def.ts_toast_done", {
+          c: res.created || 0,
+          u: res.updated || 0,
+          s: res.skipped || 0,
+          rows: res.rows_written || 0
+        }),
+        errCount ? "error" : "ok"
+      );
+      closeTableSample();
+      await loadAll();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
   /* ===================== 启停、删除、采样、导入导出 ===================== */
   async function toggleDefinition(id) {
     const def = state.definitions.find((d) => d.id === id);
@@ -1518,6 +1902,7 @@
     $("import-cancel").addEventListener("click", () => $("import-backdrop").classList.remove("open"));
     $("import-form").addEventListener("submit", submitImport);
     $("btn-batch-wizard").addEventListener("click", openBatchWizard);
+    $("btn-table-sample").addEventListener("click", openTableSample);
     const closeBatch = () => {
       closeAllDirTrees();
       $("batch-backdrop").classList.remove("open");
@@ -1526,6 +1911,11 @@
     $("batch-cancel").addEventListener("click", closeBatch);
     $("batch-backdrop").addEventListener("click", (e) => {
       if (e.target === $("batch-backdrop")) closeBatch();
+    });
+    $("ts-close").addEventListener("click", closeTableSample);
+    $("ts-cancel").addEventListener("click", closeTableSample);
+    $("ts-backdrop").addEventListener("click", (e) => {
+      if (e.target === $("ts-backdrop")) closeTableSample();
     });
     document.addEventListener("click", () => closeAllDirTrees());
     window.addEventListener("resize", () => closeAllDirTrees());
@@ -1537,10 +1927,11 @@
       }
       if ($("drawer-backdrop").classList.contains("open")) closeDrawer();
       if ($("batch-backdrop").classList.contains("open")) closeBatch();
+      if ($("ts-backdrop").classList.contains("open")) closeTableSample();
       if ($("import-backdrop").classList.contains("open")) $("import-backdrop").classList.remove("open");
     });
 
-    // 初始化 3 个可折叠多级目录树选择器
+    // 初始化 5 个可折叠多级目录树选择器
     targetDirTree = createDirTreePicker($("f-target-dir-trigger"), {
       allowCustom: true,
       defaultDirMode: true,
@@ -1573,7 +1964,128 @@
     bwTargetDirTree = createDirTreePicker($("bw-target-dir-trigger"), {
       defaultDirMode: true
     });
+    tsSourceDirTree = createDirTreePicker($("ts-source-dir-trigger"), {
+      includeAll: true,
+      showCounts: true,
+      onChange: (val) => {
+        tsRenderSourceDbForDir(val, null);
+        tsLoadTables();
+      }
+    });
+    tsTargetDirTree = createDirTreePicker($("ts-target-dir-trigger"), {
+      defaultDirMode: true
+    });
     $("def-form").querySelector(".drawer-body").addEventListener("scroll", () => closeAllDirTrees());
+    $("ts-right").addEventListener("scroll", () => closeAllDirTrees());
+
+    // 整表采样弹窗交互绑定
+    $("ts-source-db").addEventListener("change", tsLoadTables);
+    $("ts-mode").addEventListener("change", (e) => {
+      const single = e.target.value === "single_db";
+      $("ts-bundle-name").classList.toggle("hidden", !single);
+      if (single && !$("ts-bundle-name").value.trim()) {
+        const dbName = baseOf($("ts-source-db").value || "").replace(/\.(db|sqlite3|sqlite)$/i, "");
+        $("ts-bundle-name").value = dbName ? uniquePointName(dbName) : "";
+      }
+    });
+    $("ts-default-period").addEventListener("change", (e) => {
+      const val = Math.max(0, Number(e.target.value) || 0);
+      Object.values(state.ts.configs).forEach((cfg) => {
+        cfg.interval = val;
+      });
+      if (state.ts.activeTable) $("ts-period").value = val;
+    });
+    $("ts-table-search").addEventListener("input", (e) => {
+      state.ts.keyword = e.target.value;
+      tsRenderTableList();
+    });
+    $("ts-check-all").addEventListener("change", (e) => {
+      const checked = e.target.checked;
+      const kw = state.ts.keyword.trim().toLowerCase();
+      state.ts.tables.forEach((tb) => {
+        if (kw && !tb.table.toLowerCase().includes(kw) && !String(tb.chn_name || "").toLowerCase().includes(kw)) return;
+        if (checked) state.ts.selected.add(tb.table);
+        else state.ts.selected.delete(tb.table);
+      });
+      tsRenderTableList();
+    });
+    $("ts-table-list").addEventListener("click", (e) => {
+      const cb = e.target.closest(".ts-check");
+      if (cb) {
+        const tbl = cb.dataset.tsCheck;
+        if (cb.checked) state.ts.selected.add(tbl);
+        else state.ts.selected.delete(tbl);
+        tsUpdateFooter();
+        if (cb.checked && state.ts.activeTable !== tbl) tsSelectTable(tbl);
+        return;
+      }
+      const row = e.target.closest(".ts-table-row[data-ts-table]");
+      if (row) tsSelectTable(row.dataset.tsTable);
+    });
+    $("ts-point-name").addEventListener("input", () => tsSyncActiveConfigFromForm());
+    $("ts-period").addEventListener("input", () => tsSyncActiveConfigFromForm());
+    $("ts-all-fields").addEventListener("change", () => {
+      tsSyncActiveConfigFromForm();
+      tsRenderFields(state.ts.configs[state.ts.activeTable]?.fields || []);
+      tsRenderTableList();
+    });
+    $("ts-field-search").addEventListener("input", () => tsRenderFields(null));
+    $("ts-fields").addEventListener("change", () => {
+      $("ts-all-fields").checked = false;
+      tsSyncActiveConfigFromForm();
+      tsRenderTableList();
+    });
+    $("ts-fields-all").addEventListener("click", () => {
+      $("ts-all-fields").checked = false;
+      $("ts-fields").classList.remove("ts-fields-locked");
+      setAllFields($("ts-fields"), true);
+      tsSyncActiveConfigFromForm();
+      tsRenderTableList();
+    });
+    $("ts-fields-none").addEventListener("click", () => {
+      $("ts-all-fields").checked = false;
+      $("ts-fields").classList.remove("ts-fields-locked");
+      setAllFields($("ts-fields"), false);
+      tsSyncActiveConfigFromForm();
+      tsRenderTableList();
+    });
+    $("ts-fields-num").addEventListener("click", () => {
+      if (!state.ts.inspect) return;
+      $("ts-all-fields").checked = false;
+      tsRenderFields(state.ts.inspect.numeric_fields || []);
+      tsSyncActiveConfigFromForm();
+      tsRenderTableList();
+    });
+    $("ts-fb-field").addEventListener("change", () => {
+      const vals = state.ts.inspect?.sample_values?.[$("ts-fb-field").value] || [];
+      $("ts-fb-val-list").innerHTML = vals.map((v) => `<option value="${esc(v)}"></option>`).join("");
+    });
+    $("ts-add-cond").addEventListener("click", () => {
+      const field = $("ts-fb-field").value;
+      const op = $("ts-fb-op").value;
+      const val = $("ts-fb-val").value.trim();
+      if (!field || !val) return;
+      tsAppendFilter(tsFormatCondition(field, val, op));
+      $("ts-fb-val").value = "";
+    });
+    $("ts-filter").addEventListener("input", () => {
+      tsSyncActiveConfigFromForm();
+      tsRenderTableList();
+    });
+    $("ts-test-filter").addEventListener("click", () => {
+      tsSyncActiveConfigFromForm();
+      tsInspectActive(false);
+    });
+    $("ts-preview-wrap").addEventListener("click", (e) => {
+      const td = e.target.closest("td.clickable-cell");
+      if (!td) return;
+      const col = td.dataset.pcol;
+      const val = td.dataset.pval;
+      if (!col || val === "") return;
+      tsAppendFilter(tsFormatCondition(col, val, "="));
+    });
+    $("ts-save").addEventListener("click", () => submitTableSample(false));
+    $("ts-save-run").addEventListener("click", () => submitTableSample(true));
     $("batch-submit").addEventListener("click", submitBatchWizard);
     $("bw-db").addEventListener("change", loadBatchWizardTables);
     $("bw-field-mode").addEventListener("change", renderBatchWizardTable);
@@ -1679,19 +2191,34 @@
     $("btn-test-filter").addEventListener("click", () => inspectSource(null, false));
 
     // 字段快捷选择与搜索
+    $("f-all-fields").addEventListener("change", (e) => {
+      const isWild = e.target.checked;
+      $("f-fields").classList.toggle("ts-fields-locked", isWild);
+      if (isWild && state.sourceData) {
+        renderDrawerFields((state.sourceData.fields || []).filter((f) => f !== "row_key" && f !== "sample_time"));
+      }
+      syncActiveItemFromForm();
+      renderItemsStrip();
+    });
     $("f-field-search").addEventListener("input", () => renderDrawerFields(checkedFields($("f-fields"))));
     $("btn-fields-all").addEventListener("click", () => {
+      $("f-all-fields").checked = false;
+      $("f-fields").classList.remove("ts-fields-locked");
       setAllFields($("f-fields"), true);
       syncActiveItemFromForm();
       renderItemsStrip();
     });
     $("btn-fields-none").addEventListener("click", () => {
+      $("f-all-fields").checked = false;
+      $("f-fields").classList.remove("ts-fields-locked");
       setAllFields($("f-fields"), false);
       syncActiveItemFromForm();
       renderItemsStrip();
     });
     $("btn-fields-num").addEventListener("click", () => {
       if (!state.sourceData) return;
+      $("f-all-fields").checked = false;
+      $("f-fields").classList.remove("ts-fields-locked");
       renderDrawerFields(state.sourceData.numeric_fields || []);
       syncActiveItemFromForm();
       renderItemsStrip();
@@ -1796,8 +2323,13 @@
       targetDirTree?.refreshLabels();
       sourceDirTree?.refreshLabels();
       bwTargetDirTree?.refreshLabels();
+      tsSourceDirTree?.refreshLabels();
+      tsTargetDirTree?.refreshLabels();
       if ($("drawer-backdrop").classList.contains("open")) {
         renderItemsStrip();
+      }
+      if ($("ts-backdrop").classList.contains("open")) {
+        tsRenderTableList();
       }
     });
   }

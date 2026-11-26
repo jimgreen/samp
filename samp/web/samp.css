@@ -1218,13 +1218,36 @@ body.resizing-sidebar {
   flex-shrink: 0;
 }
 
-/* 查询页上下分栏：图 + 表占 80%+ 视口 */
+/* 查询页上下分栏：图 + 表占 80%+ 视口；支持「仅整表 / 仅曲线」全屏切换 */
 .query-split {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
   grid-template-rows: minmax(220px, 48%) minmax(180px, 1fr);
   gap: 6px;
+}
+
+.query-split.view-table {
+  grid-template-rows: 1fr;
+}
+
+.query-split.view-table > .panel:first-child {
+  display: none;
+}
+
+.query-split.view-chart {
+  grid-template-rows: 1fr;
+}
+
+.query-split.view-chart > .panel:last-child {
+  display: none;
+}
+
+.q-fields-scroll {
+  flex: 1 1 auto;
+  max-height: 54px;
+  overflow-y: auto;
+  padding: 1px 0;
 }
 
 .chart-panel-head {
@@ -1361,6 +1384,128 @@ body.resizing-sidebar {
   width: min(860px, 94vw);
   min-height: 340px;
   max-height: 86vh;
+}
+
+.drawer.drawer-xl {
+  width: min(1020px, 95vw);
+  height: min(86vh, 720px);
+}
+
+/* 整表采样左右分栏工作台 */
+.ts-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.ts-left {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: var(--border);
+  background: var(--bg-subtle);
+}
+
+.ts-left-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: var(--border);
+  flex-shrink: 0;
+}
+
+.ts-left-head .ctrl {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  font-size: 11px;
+}
+
+.ts-table-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ts-table-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.ts-table-row:hover {
+  background: var(--bg-hover);
+}
+
+.ts-table-row.active {
+  background: var(--bg-selected);
+  border-color: var(--accent);
+}
+
+.ts-table-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ts-table-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-table-sub {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-table-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ts-right {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ts-fields-locked {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.fields-scroll-box {
+  max-height: 110px;
+  overflow-y: auto;
+  padding: 4px 0;
 }
 
 .drawer.drawer-alarm {

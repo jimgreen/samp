@@ -21,8 +21,12 @@
 
   const state = {
     definitions: [],
+    itemSchema: { fields: [], field_types: {}, numeric_fields: [], is_wildcard: false },
     availableKeys: [],
     selectedKeys: new Set(),
+    availableTimes: [],
+    snapTime: "",
+    viewMode: "split",
     keyKeyword: "",
     lastTable: null,
     lastSeries: null,
@@ -66,12 +70,86 @@
     return items.find((it) => it.item_id === val) || items[0];
   }
 
-  function renderItemSelect(def, targetItemId = null) {
+  function renderQueryFields(presetFields = null) {
+    const schema = state.itemSchema || { fields: [], field_types: {} };
+    const allFields = schema.fields || [];
+    if (!allFields.length) {
+      $("q-fields").innerHTML = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
+      return;
+    }
+    const chosen = presetFields !== null ? presetFields : checkedFields($("q-fields"));
+    renderFieldChecks(
+      $("q-fields"),
+      allFields,
+      chosen,
+      schema.field_types || {},
+      {},
+      $("q-field-search") ? $("q-field-search").value : ""
+    );
+  }
+
+  async function loadItemSchema(def, item, preserveChecked = false) {
+    if (!def || !item) {
+      state.itemSchema = { fields: [], field_types: {}, numeric_fields: [], is_wildcard: false };
+      renderQueryFields([]);
+      return;
+    }
+    const prevChecked = preserveChecked ? checkedFields($("q-fields")) : null;
+    try {
+      const qs = item.item_id ? `?item_id=${encodeURIComponent(item.item_id)}` : "";
+      const data = await api(`/api/definitions/${def.id}/fields${qs}`);
+      state.itemSchema = {
+        fields: data.fields || [],
+        field_types: data.field_types || {},
+        numeric_fields: data.numeric_fields || [],
+        is_wildcard: Boolean(data.is_wildcard)
+      };
+    } catch {
+      const fallback = (item.fields || []).filter((f) => f !== "*");
+      state.itemSchema = { fields: fallback, field_types: {}, numeric_fields: fallback, is_wildcard: false };
+    }
+    const preset = prevChecked && prevChecked.length ? prevChecked : state.itemSchema.fields;
+    renderQueryFields(preset);
+  }
+
+  function renderSnapTimes() {
+    const sel = $("q-snap-time");
+    if (!sel) return;
+    const prev = state.snapTime;
+    const opts = [`<option value="">${esc(t("q.all_times"))}</option>`];
+    state.availableTimes.forEach((ts) => {
+      opts.push(`<option value="${ts}">${esc(formatTime(ts, true))}</option>`);
+    });
+    sel.innerHTML = opts.join("");
+    if (prev && state.availableTimes.includes(Number(prev))) {
+      sel.value = String(prev);
+    } else {
+      state.snapTime = "";
+      sel.value = "";
+    }
+  }
+
+  function setViewMode(mode) {
+    state.viewMode = mode;
+    const split = $("query-split");
+    if (split) {
+      split.classList.toggle("view-table", mode === "table");
+      split.classList.toggle("view-chart", mode === "chart");
+    }
+    $("q-view-modes").querySelectorAll(".tab-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.view === mode);
+    });
+    if (mode !== "table") {
+      requestAnimationFrame(() => state.chart?.draw());
+    }
+  }
+
+  async function renderItemSelect(def, targetItemId = null, preserveChecked = false) {
     const itemSel = $("q-item");
     if (!def) {
       itemSel.classList.add("hidden");
       itemSel.innerHTML = "";
-      $("q-fields").innerHTML = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
+      await loadItemSchema(null, null, false);
       return;
     }
     const items = def.items && def.items.length ? def.items : [{ item_id: "i1", source_table: def.source_table, target_table: "", fields: def.fields || [] }];
@@ -86,10 +164,10 @@
     const chosenItem = items.find((it) => it.item_id === prev) || items[0];
     itemSel.value = chosenItem.item_id;
     itemSel.classList.toggle("hidden", items.length <= 1);
-    renderFieldChecks($("q-fields"), chosenItem.fields || [], chosenItem.fields || []);
+    await loadItemSchema(def, chosenItem, preserveChecked);
   }
 
-  function renderDefinitionSelect(targetId = null, targetItemId = null) {
+  async function renderDefinitionSelect(targetId = null, targetItemId = null) {
     const select = $("q-def");
     const prev = targetId ?? select.value;
     select.innerHTML = state.definitions
@@ -99,9 +177,9 @@
       state.definitions.find((d) => String(d.id) === String(prev)) || state.definitions[0];
     if (chosen) {
       select.value = String(chosen.id);
-      renderItemSelect(chosen, targetItemId);
+      await renderItemSelect(chosen, targetItemId, false);
     } else {
-      renderItemSelect(null);
+      await renderItemSelect(null, null, false);
     }
   }
 
@@ -157,6 +235,7 @@
       itemId: item ? item.item_id : "",
       start,
       end,
+      snapTime: state.snapTime ? Number(state.snapTime) : null,
       fields,
       rowKeys: [...state.selectedKeys],
       agg: $("q-agg").value,
@@ -267,9 +346,11 @@
     state.pinnedIdx = null;
     if (!useSaved) state.request = req;
 
+    const tableStart = req.snapTime !== null ? req.snapTime : req.start;
+    const tableEnd = req.snapTime !== null ? req.snapTime : req.end;
     const params = new URLSearchParams({
-      start: String(req.start),
-      end: String(req.end),
+      start: String(tableStart),
+      end: String(tableEnd),
       fields: req.fields.join(","),
       order: req.order,
       limit: String(state.limit),
@@ -293,17 +374,24 @@
         if (req.itemId) kParams.set("item_id", req.itemId);
         jobs.push(api(`/api/query/${req.id}/series?${sParams.toString()}`));
         jobs.push(api(`/api/query/${req.id}/keys?${kParams.toString()}`));
+        jobs.push(api(`/api/query/${req.id}/times?${kParams.toString()}`));
       }
-      const [tableRes, seriesRes, keysRes] = await Promise.all(jobs);
+      const [tableRes, seriesRes, keysRes, timesRes] = await Promise.all(jobs);
       state.lastTable = tableRes;
       renderTable(tableRes);
-      $("q-meta").textContent = `${tableRes.tables.join(", ") || t("empty.dash")}`;
+      const wildTag = state.itemSchema.is_wildcard ? ` · ${t("def.all_fields_wild")}` : "";
+      $("q-meta").textContent = `${tableRes.tables.join(", ") || t("empty.dash")}${wildTag}`;
 
       if (refreshSeries && seriesRes) {
         state.lastSeries = seriesRes;
         state.chart.setData(seriesRes);
+        state.chart.setPinnedTime(req.snapTime !== null ? req.snapTime : null);
         renderStatsBar(seriesRes);
         renderChartMeta(seriesRes);
+      } else if (req.snapTime !== null) {
+        state.chart?.setPinnedTime(req.snapTime);
+      } else {
+        state.chart?.setPinnedTime(null);
       }
       if (refreshSeries && keysRes) {
         state.availableKeys = keysRes.keys || [];
@@ -312,6 +400,10 @@
           if (!validSet.has(k)) state.selectedKeys.delete(k);
         });
         renderKeyMenu();
+      }
+      if (refreshSeries && timesRes) {
+        state.availableTimes = timesRes.times || [];
+        renderSnapTimes();
       }
     } catch (err) {
       toast(err.message, "error");
@@ -322,8 +414,8 @@
     const req = buildRequest();
     if (!req) return;
     const params = new URLSearchParams({
-      start: String(req.start),
-      end: String(req.end),
+      start: String(req.snapTime !== null ? req.snapTime : req.start),
+      end: String(req.snapTime !== null ? req.snapTime : req.end),
       fields: req.fields.join(","),
       order: req.order
     });
@@ -347,7 +439,7 @@
   async function loadDefinitions(targetId = null) {
     try {
       state.definitions = await api("/api/definitions");
-      renderDefinitionSelect(targetId);
+      await renderDefinitionSelect(targetId);
     } catch (err) {
       toast(err.message, "error");
     }
@@ -423,22 +515,37 @@
     $("q-start").addEventListener("change", () => { state.activeRange = null; });
     $("q-end").addEventListener("change", () => { state.activeRange = null; });
 
-    $("q-def").addEventListener("change", () => {
-      renderItemSelect(currentDefinition(), null);
+    $("q-def").addEventListener("change", async () => {
+      state.snapTime = "";
+      state.availableTimes = [];
+      renderSnapTimes();
+      await renderItemSelect(currentDefinition(), null, false);
       state.selectedKeys.clear();
       state.availableKeys = [];
       renderKeyMenu();
       state.page = 0;
       runQuery(0, false, true);
     });
-    $("q-item").addEventListener("change", () => {
-      const item = currentItem();
-      if (item) renderFieldChecks($("q-fields"), item.fields || [], item.fields || []);
+    $("q-item").addEventListener("change", async () => {
+      state.snapTime = "";
+      state.availableTimes = [];
+      renderSnapTimes();
+      await loadItemSchema(currentDefinition(), currentItem(), false);
       state.selectedKeys.clear();
       state.availableKeys = [];
       renderKeyMenu();
       state.page = 0;
       runQuery(0, false, true);
+    });
+    $("q-snap-time").addEventListener("change", (e) => {
+      state.snapTime = e.target.value;
+      state.page = 0;
+      runQuery(0, false, false);
+    });
+    $("q-view-modes").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-view]");
+      if (!btn) return;
+      setViewMode(btn.dataset.view);
     });
     $("q-agg").addEventListener("change", () => runQuery(0, false, true));
     $("q-order").addEventListener("change", () => runQuery(0, false, false));
@@ -456,6 +563,11 @@
         runQuery(state.page + 1, true, false);
       }
     });
+    $("q-field-search").addEventListener("input", () => renderQueryFields(null));
+    $("q-fields-num").addEventListener("click", () => {
+      const nums = state.itemSchema.numeric_fields || [];
+      renderQueryFields(nums.length ? nums : state.itemSchema.fields || []);
+    });
     $("q-fields-all").addEventListener("click", () => setAllFields($("q-fields"), true));
     $("q-fields-none").addEventListener("click", () => setAllFields($("q-fields"), false));
 
@@ -463,11 +575,9 @@
     onLangChange(() => {
       const curDef = currentDefinition();
       if (curDef) {
-        const checked = checkedFields($("q-fields"));
-        renderItemSelect(curDef, $("q-item").value);
-        const item = currentItem(curDef);
-        if (item && checked.length) renderFieldChecks($("q-fields"), item.fields || [], checked);
+        renderItemSelect(curDef, $("q-item").value, true);
       }
+      renderSnapTimes();
       if (state.lastTable) renderTable(state.lastTable);
       if (state.lastSeries) {
         renderStatsBar(state.lastSeries);

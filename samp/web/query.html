@@ -99,6 +99,14 @@
           </div>
         </div>
         <div class="toolbar-group">
+          <select id="q-snap-time" class="select-ctrl mono" style="max-width:162px">
+            <option value="" data-i18n="q.all_times">全部时刻</option>
+          </select>
+          <div class="tabs" id="q-view-modes">
+            <button type="button" class="tab-btn active" data-view="split" data-i18n="q.view_split">图+表</button>
+            <button type="button" class="tab-btn" data-view="table" data-i18n="q.view_table">仅整表</button>
+            <button type="button" class="tab-btn" data-view="chart" data-i18n="q.view_chart">仅曲线</button>
+          </div>
           <select id="q-agg" class="select-ctrl">
             <option value="avg" data-i18n="q.agg_avg">均值聚合</option>
             <option value="raw" data-i18n="q.agg_raw">原始点</option>
@@ -128,15 +136,17 @@
 
       <div class="field-bar">
         <div class="chip-row">
+          <input id="q-field-search" class="ctrl ctrl-sm" style="width:94px" data-i18n-placeholder="def.ph_field_search" placeholder="筛选字段">
+          <button type="button" id="q-fields-num" class="btn xs" data-i18n="action.numeric_only">仅数值列</button>
           <button type="button" id="q-fields-all" class="btn xs" data-i18n="action.select_all">全选</button>
           <button type="button" id="q-fields-none" class="btn xs" data-i18n="action.clear">清空</button>
         </div>
-        <div id="q-fields" class="chip-row" style="flex:1 1 auto"></div>
+        <div id="q-fields" class="chip-row q-fields-scroll"></div>
         <span class="mono text-muted" id="q-meta">—</span>
       </div>
     </section>
 
-    <section class="query-split">
+    <section class="query-split" id="query-split">
       <div class="panel">
         <div class="chart-panel-head">
           <div class="chart-legend" id="chart-legend"></div>

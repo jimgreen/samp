@@ -889,6 +889,110 @@ def test_multilevel_directory_scan_for_target_and_source_dropdowns(tmp_path):
         assert "rt/area1/station2" in cfg["target_dirs"]
 
 
+def test_table_sample_wildcard_schema_evolution_and_snapshot_query(tmp_path):
+    root = tmp_path / "workspace"
+    (root / "rt").mkdir(parents=True)
+    src_db = root / "rt" / "plant.db"
+    with closing(sqlite3.connect(src_db)) as conn:
+        conn.execute("CREATE TABLE bus (id INTEGER PRIMARY KEY, name TEXT, kv REAL, status INTEGER)")
+        conn.execute("INSERT INTO bus VALUES (1, 'B1', 220.5, 1), (2, 'B2', 110.2, 0)")
+        conn.execute("CREATE TABLE gen (id INTEGER PRIMARY KEY, unit TEXT, mw REAL, mvar REAL)")
+        conn.execute("INSERT INTO gen VALUES (1, 'G1', 120.0, 15.5), (2, 'G2', 30.0, 4.0)")
+        conn.commit()
+
+    app = create_app(
+        definition_db="samp/samp_define.db",
+        source_db="rt/plant.db",
+        result_dir="samp",
+        enable_scheduler=False,
+        root_dir=root,
+    )
+    store = app.state.store
+    t1 = calendar.timegm((2026, 7, 1, 8, 0, 0, 0, 0, 0))
+    t2 = t1 + 60
+
+    with TestClient(app) as client:
+        # 1. 每表独立整表采样：bus 用全表(*) + status=1，gen 手选 [unit, mw] + mw>=50
+        res = client.post(
+            "/api/table-sample",
+            json={
+                "source_database": "rt/plant.db",
+                "target_dir": "samp",
+                "target_mode": "per_table",
+                "conflict_mode": "overwrite",
+                "sample_now": False,
+                "tables": [
+                    {"source_table": "bus", "name": "bus_full", "fields": ["*"], "filter": "status=1", "interval_seconds": 0},
+                    {"source_table": "gen", "name": "gen_sel", "fields": ["unit", "mw"], "filter": "mw>=50", "interval_seconds": 0},
+                ],
+            },
+        )
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert data["created"] == 2
+        defs = {d["samp_name"]: d for d in data["definitions"]}
+        bus_id = defs["bus_full"]["id"]
+        gen_id = defs["gen_sel"]["id"]
+        assert defs["bus_full"]["fields"] == ["*"]
+
+        # 2. 首次采样 + 源表动态新增列 freq 后再次采样，验证全表(*)自动补列
+        r1 = store.run_sample(bus_id, t1)
+        assert r1["rows_written"] == 1
+        with closing(sqlite3.connect(src_db)) as conn:
+            conn.execute("ALTER TABLE bus ADD COLUMN freq REAL")
+            conn.execute("UPDATE bus SET freq=50.02 WHERE id=1")
+            conn.commit()
+        r2 = store.run_sample(bus_id, t2)
+        assert r2["rows_written"] == 1
+        assert "freq" in r2["item_results"][0]["fields"]
+
+        # 3. 验证 /api/definitions/{id}/fields 自动展开真实列与数值列
+        f_meta = client.get(f"/api/definitions/{bus_id}/fields").json()
+        assert f_meta["is_wildcard"] is True
+        assert f_meta["fields"] == ["id", "name", "kv", "status", "freq"]
+        assert set(f_meta["numeric_fields"]) == {"id", "kv", "status", "freq"}
+
+        # 4. 验证 /api/query/{id}/times 与按单快照时刻查询整表快照
+        times_res = client.get(f"/api/query/{bus_id}/times", params={"start": t1 - 10, "end": t2 + 10}).json()
+        assert times_res["times"] == [t2, t1]
+
+        snap_q = client.get(f"/api/query/{bus_id}", params={"start": t2, "end": t2}).json()
+        assert snap_q["total_rows"] == 1
+        assert snap_q["rows"][0]["freq"] == 50.02
+        assert snap_q["rows"][0]["name"] == "B1"
+
+        # gen 手选字段与过滤验证
+        store.run_sample(gen_id, t1)
+        gen_q = client.get(f"/api/query/{gen_id}", params={"start": t1 - 10, "end": t1 + 10}).json()
+        assert gen_q["columns"] == ["sample_time", "row_key", "unit", "mw"]
+        assert gen_q["total_rows"] == 1
+        assert gen_q["rows"][0]["unit"] == "G1"
+
+        # 5. 合并同库模式（single_db）+ sample_now=True 立即整表采样
+        bundle = client.post(
+            "/api/table-sample",
+            json={
+                "source_database": "rt/plant.db",
+                "target_dir": "archive/bundle",
+                "target_mode": "single_db",
+                "bundle_name": "plant_snap",
+                "conflict_mode": "overwrite",
+                "sample_now": True,
+                "tables": [
+                    {"source_table": "bus", "fields": ["*"], "filter": "", "interval_seconds": 0},
+                    {"source_table": "gen", "fields": ["unit", "mw"], "filter": "mw>=50", "interval_seconds": 0},
+                ],
+            },
+        )
+        assert bundle.status_code == 200, bundle.text
+        b_data = bundle.json()
+        assert b_data["created"] == 1
+        assert b_data["rows_written"] == 3  # bus 2 行 + gen 1 行
+        assert len(b_data["sampled"]) == 1
+        assert len(b_data["sampled"][0]["tables"]) == 2
+
+
+
 
 
 

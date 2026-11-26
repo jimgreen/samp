@@ -55,6 +55,27 @@ class BatchEnableIn(BaseModel):
     enabled: bool
 
 
+class TableSampleEntryIn(BaseModel):
+    source_table: str
+    name: str = ""
+    target_table: str = ""
+    fields: list[str] = Field(default_factory=lambda: ["*"])
+    filter: str = ""
+    interval_seconds: int = Field(default=60, ge=0)
+    enabled: bool = True
+
+
+class TableSampleBatchIn(BaseModel):
+    source_database: str
+    target_dir: str = ""
+    target_mode: str = "per_table"  # per_table | single_db
+    bundle_name: str = ""
+    target_name: str = ""
+    conflict_mode: str = "overwrite"  # overwrite | skip
+    sample_now: bool = False
+    tables: list[TableSampleEntryIn] = Field(min_length=1)
+
+
 class SourceRowsIn(BaseModel):
     source_database: str = ""
     source_table: str
@@ -221,6 +242,125 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
+    @app.get("/api/definitions/{samp_id}/fields")
+    def definition_fields(samp_id: int, item_id: str | None = None):
+        try:
+            return store.resolve_definition_fields(samp_id, item_id=item_id)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/table-sample")
+    async def table_sample(payload: TableSampleBatchIn):
+        """整表采样批量创建/更新接口：支持按表独立建点或合并至同一结果库，并可选立即执行采样。"""
+        mode = (payload.target_mode or "per_table").lower()
+        conflict = (payload.conflict_mode or "overwrite").lower()
+        if mode not in ("per_table", "single_db"):
+            raise HTTPException(400, "target_mode 仅支持 per_table 或 single_db")
+        if conflict not in ("overwrite", "skip"):
+            raise HTTPException(400, "conflict_mode 仅支持 overwrite 或 skip")
+
+        existing = {d["samp_name"]: d["id"] for d in store.list_definitions()}
+        saved_defs: list[dict[str, Any]] = []
+        created, updated, skipped = 0, 0, 0
+        errors: list[dict[str, Any]] = []
+
+        if mode == "single_db":
+            bundle_name = (payload.bundle_name or "").strip()
+            if not bundle_name:
+                raise HTTPException(400, "合并到同一结果库时必须指定采样点名")
+            items_payload = []
+            for idx, entry in enumerate(payload.tables):
+                tgt = (entry.target_table or "").strip()
+                if not tgt and idx > 0:
+                    tgt = entry.source_table
+                items_payload.append(
+                    {
+                        "source_database": payload.source_database,
+                        "source_table": entry.source_table,
+                        "target_table": tgt,
+                        "fields": entry.fields or ["*"],
+                        "filter": entry.filter or "",
+                    }
+                )
+            first = payload.tables[0]
+            def_payload = {
+                "name": bundle_name,
+                "target_dir": payload.target_dir,
+                "target_name": payload.target_name,
+                "interval_seconds": first.interval_seconds,
+                "enabled": first.enabled,
+                "items": items_payload,
+            }
+            try:
+                if bundle_name in existing:
+                    if conflict == "skip":
+                        skipped += 1
+                    else:
+                        saved = store.upsert_definition(def_payload, existing[bundle_name])
+                        saved_defs.append(saved)
+                        updated += 1
+                else:
+                    saved = store.upsert_definition(def_payload)
+                    saved_defs.append(saved)
+                    created += 1
+            except (ValueError, sqlite3.Error) as exc:
+                raise HTTPException(400, str(exc))
+        else:
+            for idx, entry in enumerate(payload.tables):
+                pt_name = (entry.name or entry.source_table).strip()
+                def_payload = {
+                    "name": pt_name,
+                    "source_database": payload.source_database,
+                    "source_table": entry.source_table,
+                    "target_dir": payload.target_dir,
+                    "target_name": "",
+                    "fields": entry.fields or ["*"],
+                    "filter": entry.filter or "",
+                    "interval_seconds": entry.interval_seconds,
+                    "enabled": entry.enabled,
+                }
+                try:
+                    if pt_name in existing:
+                        if conflict == "skip":
+                            skipped += 1
+                            continue
+                        saved = store.upsert_definition(def_payload, existing[pt_name])
+                        saved_defs.append(saved)
+                        updated += 1
+                    else:
+                        saved = store.upsert_definition(def_payload)
+                        existing[saved["samp_name"]] = saved["id"]
+                        saved_defs.append(saved)
+                        created += 1
+                except (ValueError, sqlite3.Error) as exc:
+                    errors.append({"index": idx, "table": entry.source_table, "name": pt_name, "error": str(exc)})
+
+        sampled: list[dict[str, Any]] = []
+        sample_errors: list[dict[str, Any]] = []
+        if payload.sample_now and saved_defs:
+            results = await asyncio.gather(
+                *(execute_sample(d["id"], trigger="manual") for d in saved_defs),
+                return_exceptions=True,
+            )
+            for d, res in zip(saved_defs, results):
+                if isinstance(res, Exception):
+                    sample_errors.append({"id": d["id"], "name": d["samp_name"], "error": str(res)})
+                else:
+                    sampled.append(res)
+
+        return {
+            "created": created,
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors,
+            "definitions": saved_defs,
+            "sampled": sampled,
+            "sample_errors": sample_errors,
+            "rows_written": sum(int(r.get("rows_written", 0)) for r in sampled),
+        }
+
     @app.get("/api/definitions/{samp_id}/runtime")
     def definition_runtime(samp_id: int):
         try:
@@ -229,6 +369,23 @@ def create_app(
             raise HTTPException(404, str(exc))
         item.update(scheduler.snapshot_definition(samp_id, item["interval_seconds"], item["enabled"]))
         return item
+
+    @app.get("/api/query/{samp_id}/times")
+    def query_times(
+        samp_id: int,
+        start: int = Query(...),
+        end: int = Query(...),
+        limit: int = Query(200, ge=1, le=2000),
+        item_id: str | None = None,
+    ):
+        if end < start:
+            raise HTTPException(400, "end 不能早于 start")
+        try:
+            return store.query_sample_times(samp_id, start, end, limit, item_id=item_id)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.get("/api/query/{samp_id}/keys")
     def query_keys(
