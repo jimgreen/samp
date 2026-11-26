@@ -81,6 +81,7 @@
           : `<span class="badge muted">${esc(t("state.disabled"))}</span>`;
         const period = item.interval_seconds > 0 ? `${item.interval_seconds}${t("unit.sec")}` : t("state.manual");
         const years = item.result_years?.length ? item.result_years.join(", ") : t("empty.dash");
+        const itemBadge = item.item_count > 1 ? ` <span class="badge ok">${esc(t("def.item_count", { n: item.item_count }))}</span>` : "";
 
         let msgHtml = `<span class="text-muted">${esc(t("state.idle"))}</span>`;
         if (item.last_status === "error") {
@@ -91,11 +92,11 @@
 
         return `
           <tr>
-            <td><strong>${esc(item.name)}</strong></td>
+            <td><strong>${esc(item.name)}</strong>${itemBadge}</td>
             <td>${enabledBadge}</td>
             <td class="num">${esc(period)}</td>
             <td class="mono">${esc(item.source_table)}</td>
-            <td class="mono">${esc(years)}</td>
+            <td class="mono" title="${esc(item.target_preview || "")}">${esc(years)}</td>
             <td class="num">${esc(item.total_rows ?? 0)}</td>
             <td class="num">${esc(formatBytes(item.result_size_bytes))}</td>
             <td class="num">${esc(formatTime(item.last_result_at, true))}</td>
@@ -162,18 +163,20 @@
         const linkBadge = db.is_orphan
           ? `<span class="badge warn">${esc(t("state.orphan"))}</span>`
           : `<span class="badge ok">${esc(t("state.active"))}</span>`;
+        const dbPath = db.path || db.filename;
+        const tblBadge = db.table_count > 1 ? ` <span class="badge ok" title="${esc((db.tables || []).join(", "))}">${esc(db.table_count)}T</span>` : "";
         return `
           <tr>
-            <td class="mono">${esc(db.filename)}</td>
+            <td class="mono cell-ellipsis" title="${esc(dbPath)}">${esc(dbPath)}${tblBadge}</td>
             <td><strong>${esc(db.samp_name)}</strong></td>
-            <td class="num">${esc(db.year)}</td>
+            <td class="num">${esc(db.year ?? t("empty.dash"))}</td>
             <td class="num">${esc(db.row_count)}</td>
             <td class="num">${esc(formatBytes(db.size_bytes))}</td>
             <td class="mono">${esc(range)}</td>
             <td>${rtdbBadge}</td>
             <td>${linkBadge}</td>
             <td class="sticky-actions">
-              <button type="button" class="btn xs icon-only danger" data-del-db="${esc(db.filename)}" data-rows="${db.row_count}" data-size="${esc(formatBytes(db.size_bytes))}" title="${esc(t("action.delete"))}">${ICONS.trash}</button>
+              <button type="button" class="btn xs icon-only danger" data-del-db="${esc(dbPath)}" data-rows="${db.row_count}" data-size="${esc(formatBytes(db.size_bytes))}" title="${esc(t("action.delete"))}">${ICONS.trash}</button>
             </td>
           </tr>`;
       })
@@ -259,7 +262,11 @@
     });
     if (!ok) return;
     try {
-      await api(`/api/storage/databases/${encodeURIComponent(filename)}`, { method: "DELETE" });
+      const encodedPath = String(filename)
+        .split("/")
+        .map((seg) => encodeURIComponent(seg))
+        .join("/");
+      await api(`/api/storage/databases/${encodedPath}`, { method: "DELETE" });
       toast(t("rt.toast_db_deleted", { file: filename }), "ok");
       await Promise.all([loadStorage(), loadStatus()]);
     } catch (err) {

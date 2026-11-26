@@ -16,17 +16,29 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .scheduler import SamplingScheduler
-from .store import SQLITE_DIR, Store
+from .store import DEFAULT_DEFINITION_DB, DEFAULT_RESULT_DIR, DEFAULT_SOURCE_DB, ROOT_DIR, SQLITE_DIR, Store
 
 LOGGER = logging.getLogger("samp")
 WEB_DIR = Path(__file__).with_name("web")
 
 
+class SampleItemIn(BaseModel):
+    item_id: str = ""
+    source_database: str = ""
+    source_table: str
+    target_table: str = ""
+    fields: list[str] = Field(min_length=1)
+    filter: str = ""
+
+
 class DefinitionIn(BaseModel):
     name: str
-    source_database: str = str(SQLITE_DIR / "source.db")
-    source_table: str
-    fields: list[str] = Field(min_length=1)
+    source_database: str = ""
+    source_table: str = ""
+    target_dir: str = ""
+    target_name: str = ""
+    fields: list[str] = Field(default_factory=list)
+    items: list[SampleItemIn] | None = None
     interval_seconds: int = Field(default=60, ge=0)
     filter: str = ""
     enabled: bool = True
@@ -44,7 +56,7 @@ class BatchEnableIn(BaseModel):
 
 
 class SourceRowsIn(BaseModel):
-    source_database: str = str(SQLITE_DIR / "source.db")
+    source_database: str = ""
     source_table: str
     rows: list[dict[str, Any]]
 
@@ -55,15 +67,16 @@ def _split_csv_param(raw: str) -> list[str] | None:
 
 
 def create_app(
-    definition_db: str | Path = SQLITE_DIR / "samp_define.db",
-    source_db: str | Path = SQLITE_DIR / "source.db",
-    result_dir: str | Path = SQLITE_DIR,
+    definition_db: str | Path = DEFAULT_DEFINITION_DB,
+    source_db: str | Path = DEFAULT_SOURCE_DB,
+    result_dir: str | Path = DEFAULT_RESULT_DIR,
     enable_scheduler: bool = True,
     workers: int = 4,
     align: bool = True,
+    root_dir: str | Path | None = None,
 ) -> FastAPI:
     """构建 SAMP FastAPI 应用，统一托管配置、调度、查询与存储治理接口。"""
-    store = Store(definition_db, source_db, result_dir)
+    store = Store(definition_db, source_db, result_dir, root_dir=root_dir)
     scheduler = SamplingScheduler(store, workers=workers, align=align)
     if not enable_scheduler:
         scheduler.mark_disabled()
@@ -89,12 +102,14 @@ def create_app(
     @app.get("/api/config")
     def config():
         return {
-            "default_source_db": str(Path(store.default_source_db)).replace("\\", "/"),
-            "sqlite_dir": str(store.result_dir).replace("\\", "/"),
+            "root_dir": store.root_dir.as_posix(),
+            "default_source_db": store.to_relative_path(store.default_source_db),
+            "sqlite_dir": store.to_relative_path(store.result_dir),
             "scheduler_enabled": bool(enable_scheduler),
             "align": bool(align),
             "workers": int(workers),
             "source_databases": store.list_source_databases(),
+            "target_dirs": store.list_target_dirs(),
         }
 
     @app.get("/api/definitions")
@@ -141,6 +156,33 @@ def create_app(
         if not store.delete_definition(samp_id):
             raise HTTPException(404, "采样定义不存在")
         return {"ok": True}
+
+    @app.post("/api/definitions/{samp_id}/items")
+    def add_definition_item(samp_id: int, payload: SampleItemIn):
+        try:
+            return store.add_definition_item(samp_id, payload.model_dump())
+        except KeyError as exc:
+            raise HTTPException(404, str(exc))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.put("/api/definitions/{samp_id}/items/{item_id}")
+    def update_definition_item(samp_id: int, item_id: str, payload: SampleItemIn):
+        try:
+            return store.update_definition_item(samp_id, item_id, payload.model_dump())
+        except KeyError as exc:
+            raise HTTPException(404, str(exc))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.delete("/api/definitions/{samp_id}/items/{item_id}")
+    def delete_definition_item(samp_id: int, item_id: str):
+        try:
+            return store.delete_definition_item(samp_id, item_id)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.post("/api/definitions/batch-enable")
     def batch_enable_definitions(payload: BatchEnableIn):
@@ -193,11 +235,12 @@ def create_app(
         start: int = Query(...),
         end: int = Query(...),
         limit: int = Query(500, ge=1, le=5000),
+        item_id: str | None = None,
     ):
         if end < start:
             raise HTTPException(400, "end 不能早于 start")
         try:
-            return store.query_keys(samp_id, start, end, limit)
+            return store.query_keys(samp_id, start, end, limit, item_id=item_id)
         except KeyError as exc:
             raise HTTPException(404, str(exc))
         except ValueError as exc:
@@ -214,6 +257,7 @@ def create_app(
         agg: str = Query("avg"),
         max_points: int = Query(600, ge=50, le=5000),
         max_raw_points: int = Query(20000, ge=100, le=200000),
+        item_id: str | None = None,
     ):
         if end < start:
             raise HTTPException(400, "end 不能早于 start")
@@ -228,6 +272,7 @@ def create_app(
                 agg,
                 max_points,
                 max_raw_points,
+                item_id=item_id,
             )
         except KeyError as exc:
             raise HTTPException(404, str(exc))
@@ -242,6 +287,7 @@ def create_app(
         fields: str = "",
         row_keys: str = "",
         order: str = Query("asc"),
+        item_id: str | None = None,
     ):
         if end < start:
             raise HTTPException(400, "end 不能早于 start")
@@ -253,6 +299,7 @@ def create_app(
                 _split_csv_param(fields),
                 _split_csv_param(row_keys),
                 order,
+                item_id=item_id,
             )
         except KeyError as exc:
             raise HTTPException(404, str(exc))
@@ -274,7 +321,8 @@ def create_app(
                 buf.seek(0)
                 buf.truncate(0)
 
-        filename = f"{definition['samp_name']}_samples.csv"
+        suffix = f"_{item_id}" if item_id else ""
+        filename = f"{definition['samp_name']}{suffix}_samples.csv"
         headers = {
             "Content-Disposition": f"attachment; filename=\"samples.csv\"; filename*=UTF-8''{quote(filename)}"
         }
@@ -290,6 +338,7 @@ def create_app(
         order: str = Query("asc"),
         limit: int = Query(1000, ge=1, le=10000),
         offset: int = Query(0, ge=0),
+        item_id: str | None = None,
     ):
         if end < start:
             raise HTTPException(400, "end 不能早于 start")
@@ -303,6 +352,7 @@ def create_app(
                 offset,
                 _split_csv_param(row_keys),
                 order,
+                item_id=item_id,
             )
         except KeyError as exc:
             raise HTTPException(404, str(exc))
@@ -311,7 +361,11 @@ def create_app(
 
     @app.get("/api/source/databases")
     def source_databases():
-        return {"databases": store.list_source_databases(), "default": str(Path(store.default_source_db)).replace("\\", "/")}
+        return {
+            "root_dir": store.root_dir.as_posix(),
+            "databases": store.list_source_databases(),
+            "default": store.to_relative_path(store.default_source_db),
+        }
 
     @app.get("/api/source/tables/summary")
     def source_tables_summary(source_database: str | None = None):
@@ -352,14 +406,15 @@ def create_app(
     def storage_databases():
         items = store.list_result_databases()
         return {
-            "result_dir": str(store.result_dir).replace("\\", "/"),
+            "root_dir": store.root_dir.as_posix(),
+            "result_dir": store.to_relative_path(store.result_dir),
             "total": len(items),
             "orphans": sum(1 for item in items if item["is_orphan"]),
             "total_size_bytes": sum(item["size_bytes"] for item in items),
             "items": items,
         }
 
-    @app.delete("/api/storage/databases/{filename}")
+    @app.delete("/api/storage/databases/{filename:path}")
     def delete_storage_database(filename: str):
         try:
             removed = store.delete_result_database(filename)
@@ -387,8 +442,17 @@ def create_app(
     def health():
         return {"status": "ok", "service": "samp", **store.summary(), "scheduler": scheduler.snapshot_summary()}
 
+    @app.middleware("http")
+    async def no_cache_static(request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     def render_page(filename: str) -> str:
-        return (WEB_DIR / filename).read_text(encoding="utf-8")
+        html = (WEB_DIR / filename).read_text(encoding="utf-8")
+        ver = int(max((p.stat().st_mtime for p in WEB_DIR.iterdir() if p.is_file()), default=0))
+        return html.replace('.css"', f'.css?v={ver}"').replace('.js"', f'.js?v={ver}"')
 
     @app.get("/", include_in_schema=False)
     def home():

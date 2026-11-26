@@ -25,7 +25,7 @@
 
     <section id="storage" class="card">
       <h2>2. 数据存储</h2>
-      <p>默认 SQLite 根目录为：</p><pre>D:\codex\sqldb\realtime\samp</pre>
+      <p>默认工作根目录为（可通过 <code>SAMP_ROOT_DIR</code> 或 <code>--root-dir</code> 修改，业务定义中统一保存相对路径）：</p><pre>D:\codex\workspace</pre>
       <table><thead><tr><th>文件</th><th>用途</th><th>结构</th></tr></thead><tbody>
         <tr><td><code>samp_define.db</code></td><td>采样定义</td><td>一张 <code>samp_define</code> 业务表</td></tr>
         <tr><td><code>samp_采样点名_年份.db</code></td><td>采样结果</td><td>每个库一张同名业务表，例如 <code>samp_电表A_2026</code></td></tr>
@@ -76,34 +76,51 @@
         <tr><td>POST /api/definitions</td><td>创建采样定义。</td></tr>
         <tr><td>PUT /api/definitions/{id}</td><td>更新采样定义。</td></tr>
         <tr><td>DELETE /api/definitions/{id}</td><td>删除采样定义。</td></tr>
+        <tr><td>POST /api/definitions/{id}/items</td><td>向已定义的采样点追加一条采集项（同库独立业务表）。</td></tr>
+        <tr><td>PUT /api/definitions/{id}/items/{item_id}</td><td>修改采样点内指定采集项的源库/源表/目标表/字段/过滤。</td></tr>
+        <tr><td>DELETE /api/definitions/{id}/items/{item_id}</td><td>移除采样点内指定采集项（至少保留一条）。</td></tr>
         <tr><td>POST /api/definitions/{id}/enable?enabled=true|false</td><td>启用或停用定义。</td></tr>
         <tr><td>POST /api/definitions/batch-enable</td><td>批量启用或停用采样定义。</td></tr>
         <tr><td>GET /api/definitions/{id}/runtime</td><td>读取单个采样点运行状态与调度快照。</td></tr>
-        <tr><td>POST /api/sample/{id}</td><td>立即执行一次采样。</td></tr>
+        <tr><td>POST /api/sample/{id}</td><td>立即执行一次采样（一库多表同事务写入）。</td></tr>
         <tr><td>POST /api/sample/all</td><td>并行执行全部已启用采样定义。</td></tr>
-        <tr><td>GET /api/query/{id}?start=&amp;end=&amp;fields=&amp;row_keys=&amp;order=&amp;limit=&amp;offset=</td><td>按时间、字段、row_key、排序和分页参数查询采样结果。</td></tr>
-        <tr><td>GET /api/query/{id}/keys?start=&amp;end=</td><td>获取时间范围内的去重 row_key 列表。</td></tr>
-        <tr><td>GET /api/query/{id}/series?start=&amp;end=&amp;fields=&amp;row_keys=&amp;agg=&amp;bucket_seconds=</td><td>获取趋势图聚合/降采样序列与分组统计。</td></tr>
-        <tr><td>GET /api/query/{id}/export?start=&amp;end=&amp;fields=&amp;row_keys=&amp;order=</td><td>全量流式导出 UTF-8 CSV。</td></tr>
-        <tr><td>GET /api/config</td><td>读取服务配置、默认源库与调度状态。</td></tr>
-        <tr><td>GET /api/source/databases</td><td>扫描可用源 SQLite 数据库列表。</td></tr>
+        <tr><td>GET /api/query/{id}?start=&amp;end=&amp;item_id=&amp;fields=&amp;row_keys=&amp;order=&amp;limit=&amp;offset=</td><td>按时间、采集项、字段、row_key、排序和分页参数查询采样结果。</td></tr>
+        <tr><td>GET /api/query/{id}/keys?start=&amp;end=&amp;item_id=</td><td>获取时间范围内的去重 row_key 列表。</td></tr>
+        <tr><td>GET /api/query/{id}/series?start=&amp;end=&amp;item_id=&amp;fields=&amp;row_keys=&amp;agg=&amp;bucket_seconds=</td><td>获取趋势图聚合/降采样序列与分组统计。</td></tr>
+        <tr><td>GET /api/query/{id}/export?start=&amp;end=&amp;item_id=&amp;fields=&amp;row_keys=&amp;order=</td><td>全量流式导出 UTF-8 CSV。</td></tr>
+        <tr><td>GET /api/config</td><td>读取服务配置、根目录、默认源库、已有目标目录与调度状态。</td></tr>
+        <tr><td>GET /api/source/databases</td><td>扫描工作根目录下可用源 SQLite 数据库（相对路径）。</td></tr>
         <tr><td>GET /api/source/tables?source_database=</td><td>读取源库中的表名。</td></tr>
         <tr><td>GET /api/source/inspect?source_database=&amp;source_table=&amp;filter=</td><td>读取源表字段类型、命中计数和预览数据。</td></tr>
         <tr><td>GET /api/runtime/logs?limit=&amp;status=</td><td>读取最近采样执行与错误日志。</td></tr>
-        <tr><td>GET /api/storage/databases / DELETE /api/storage/databases/{filename}</td><td>查看年度结果库、识别孤儿库并安全删除。</td></tr>
+        <tr><td>GET /api/storage/databases / DELETE /api/storage/databases/{path}</td><td>查看全部结果库（含自定义目录与多表统计）、识别孤儿库并安全删除。</td></tr>
         <tr><td>GET /api/status</td><td>一次性读取服务总览、全量单点运行态与最近日志。</td></tr>
       </tbody></table>
-      <h3>创建定义示例</h3><pre>POST /api/definitions
+      <h3>创建多采集项定义示例（自定义目标库 + 一库多表）</h3><pre>POST /api/definitions
 Content-Type: application/json
 
 {
-  "name": "电表A",
-  "source_database": "D:/data/realtime.db",
-  "source_table": "meter",
-  "fields": ["voltage", "current"],
+  "name": "变电站A",
+  "target_dir": "archive/station",
+  "target_name": "station_a_{year}.db",
   "interval_seconds": 60,
-  "filter": "status=1",
-  "enabled": true
+  "enabled": true,
+  "items": [
+    {
+      "source_database": "realtime/substation.db",
+      "source_table": "meter",
+      "target_table": "",
+      "fields": ["voltage", "current"],
+      "filter": "status=1"
+    },
+    {
+      "source_database": "realtime/substation.db",
+      "source_table": "inverter",
+      "target_table": "inverter",
+      "fields": ["kw", "temp"],
+      "filter": ""
+    }
+  ]
 }</pre>
     </section>
 

@@ -530,5 +530,326 @@ def test_source_tables_summary_rtdb_labels_and_sample_values(tmp_path):
         assert set(inspect["sample_values"]["status"]) == {0, 1}
 
 
+def test_root_dir_and_relative_paths_across_store_and_api(tmp_path):
+    root = tmp_path / "workspace"
+    sub_dir = root / "realtime"
+    sub_dir.mkdir(parents=True)
+    src_db = sub_dir / "meter.db"
+    with sqlite3.connect(src_db) as conn:
+        conn.execute("CREATE TABLE feeder (id INTEGER PRIMARY KEY, power REAL)")
+        conn.execute("INSERT INTO feeder VALUES (1, 128.5)")
+
+    app = create_app(
+        definition_db="samp/samp_define.db",
+        source_db="realtime/meter.db",
+        result_dir="samp",
+        enable_scheduler=False,
+        root_dir=root,
+    )
+    with TestClient(app) as client:
+        cfg = client.get("/api/config").json()
+        assert cfg["root_dir"] == root.resolve().as_posix()
+        assert cfg["default_source_db"] == "realtime/meter.db"
+        assert cfg["sqlite_dir"] == "samp"
+        assert "realtime/meter.db" in cfg["source_databases"]
+
+        # 即使提交绝对路径，入库后也自动规范化为相对路径
+        created = client.post(
+            "/api/definitions",
+            json={
+                "name": "rel_feeder",
+                "source_database": str(src_db),
+                "source_table": "feeder",
+                "fields": ["power"],
+                "interval_seconds": 0,
+            },
+        ).json()
+        assert created["source_database"] == "realtime/meter.db"
+
+        sampled = client.post(f"/api/sample/{created['id']}").json()
+        assert sampled["rows_written"] == 1
+        assert sampled["relative_path"].startswith("samp/samp_rel_feeder_")
+
+        # 使用相对路径可直接预览与查询
+        insp = client.get(
+            "/api/source/inspect",
+            params={"source_database": "realtime/meter.db", "source_table": "feeder"},
+        ).json()
+        assert insp["source_database"] == "realtime/meter.db"
+        assert insp["total_rows"] == 1
+
+
+def test_custom_target_dir_template_single_db_migration_and_delete(tmp_path):
+    root = tmp_path / "workspace"
+    (root / "src").mkdir(parents=True)
+    src_db = root / "src" / "grid.db"
+    with sqlite3.connect(src_db) as conn:
+        conn.execute("CREATE TABLE line (id INTEGER PRIMARY KEY, p REAL, q REAL)")
+        conn.execute("INSERT INTO line VALUES (1, 101.5, 22.3)")
+
+    app = create_app(
+        definition_db="samp/samp_define.db",
+        source_db="src/grid.db",
+        result_dir="samp",
+        enable_scheduler=False,
+        root_dir=root,
+    )
+    store = app.state.store
+    t_2025 = calendar.timegm((2025, 12, 31, 23, 59, 0, 0, 0, 0))
+    t_2026 = calendar.timegm((2026, 1, 1, 0, 1, 0, 0, 0, 0))
+
+    with TestClient(app) as client:
+        # 1. 自定义目录 + 前缀（按年分库）
+        d1 = client.post(
+            "/api/definitions",
+            json={
+                "name": "line_a",
+                "source_database": "src/grid.db",
+                "source_table": "line",
+                "target_dir": "archive/grid",
+                "target_name": "grid_a",
+                "fields": ["p"],
+                "interval_seconds": 0,
+            },
+        )
+        assert d1.status_code == 200, d1.text
+        d1_data = d1.json()
+        assert d1_data["target_dir"] == "archive/grid"
+        assert d1_data["target_name"] == "grid_a"
+        assert d1_data["target_preview"] == "archive/grid/grid_a_{year}.db"
+
+        res1 = store.run_sample(d1_data["id"], t_2026)
+        assert res1["relative_path"] == "archive/grid/grid_a_2026.db"
+        assert (root / "archive/grid/grid_a_2026.db").is_file()
+
+        # 2. 自定义含 {year} 模板
+        d2 = client.post(
+            "/api/definitions",
+            json={
+                "name": "line_b",
+                "source_database": "src/grid.db",
+                "source_table": "line",
+                "target_dir": "archive/tpl",
+                "target_name": "plant_{year}_his.db",
+                "fields": ["p"],
+                "interval_seconds": 0,
+            },
+        )
+        assert d2.status_code == 200, d2.text
+        res2 = store.run_sample(d2.json()["id"], t_2026)
+        assert res2["relative_path"] == "archive/tpl/plant_2026_his.db"
+
+        # 3. 单库模式（不分年，跨年写入同一文件且查询无重复）
+        d3 = client.post(
+            "/api/definitions",
+            json={
+                "name": "line_single",
+                "source_database": "src/grid.db",
+                "source_table": "line",
+                "target_dir": "archive/single",
+                "target_name": "station_all.db",
+                "fields": ["p", "q"],
+                "interval_seconds": 0,
+            },
+        )
+        assert d3.status_code == 200, d3.text
+        d3_id = d3.json()["id"]
+        assert store.run_sample(d3_id, t_2025)["relative_path"] == "archive/single/station_all.db"
+        assert store.run_sample(d3_id, t_2026)["relative_path"] == "archive/single/station_all.db"
+        q3 = client.get(f"/api/query/{d3_id}", params={"start": t_2025 - 60, "end": t_2026 + 60}).json()
+        assert q3["total_rows"] == 2
+        assert q3["tables"] == ["station_all"]
+
+        # 4. 目标库冲突检测
+        dup = client.post(
+            "/api/definitions",
+            json={
+                "name": "line_conflict",
+                "source_database": "src/grid.db",
+                "source_table": "line",
+                "target_dir": "archive/single",
+                "target_name": "station_all.db",
+                "fields": ["p"],
+                "interval_seconds": 0,
+            },
+        )
+        assert dup.status_code == 400
+
+        # 5. 修改 target_dir / target_name 并同步迁移已有结果库与 RTDB 登记
+        upd = client.put(
+            f"/api/definitions/{d1_data['id']}",
+            json={
+                "name": "line_a",
+                "source_database": "src/grid.db",
+                "source_table": "line",
+                "target_dir": "archive/grid_v2",
+                "target_name": "grid_new",
+                "fields": ["p"],
+                "interval_seconds": 0,
+                "rename_results": True,
+            },
+        )
+        assert upd.status_code == 200, upd.text
+        assert upd.json()["migrated_results"] == ["grid_new_2026.db"]
+        new_db = root / "archive/grid_v2/grid_new_2026.db"
+        assert new_db.is_file()
+        assert not (root / "archive/grid/grid_a_2026.db").exists()
+        with closing(sqlite3.connect(new_db)) as conn:
+            tables = [r[0] for r in conn.execute("SELECT table_name FROM rtdb_schema_tables").fetchall()]
+            assert tables == ["grid_new_2026"]
+
+        # 6. 结果库列表包含自定义子目录相对路径，且支持按相对路径安全删除
+        dbs = client.get("/api/storage/databases").json()
+        paths = {it["path"]: it for it in dbs["items"]}
+        assert "archive/grid_v2/grid_new_2026.db" in paths
+        assert "archive/single/station_all.db" in paths
+        assert paths["archive/single/station_all.db"]["year"] is None
+
+        del_res = client.delete("/api/storage/databases/archive/grid_v2/grid_new_2026.db")
+        assert del_res.status_code == 200
+        assert not new_db.exists()
+
+
+def test_multi_item_single_db_multi_table_crud_and_query(tmp_path):
+    root = tmp_path / "workspace"
+    (root / "rt").mkdir(parents=True)
+    src1 = root / "rt" / "substation.db"
+    src2 = root / "rt" / "env.db"
+    with sqlite3.connect(src1) as conn:
+        conn.execute("CREATE TABLE meter (id INTEGER PRIMARY KEY, ua REAL, ia REAL, status INTEGER)")
+        conn.execute("INSERT INTO meter VALUES (1, 220.5, 12.1, 1), (2, 219.8, 11.4, 0)")
+        conn.execute("CREATE TABLE inverter (dev TEXT PRIMARY KEY, kw REAL, temp REAL, flag INTEGER)")
+        conn.execute("INSERT INTO inverter VALUES ('inv1', 88.2, 42.5, 1), ('inv2', 75.0, 39.0, 0)")
+    with sqlite3.connect(src2) as conn:
+        conn.execute("CREATE TABLE weather (site TEXT PRIMARY KEY, humidity REAL)")
+        conn.execute("INSERT INTO weather VALUES ('north', 55.2)")
+
+    app = create_app(
+        definition_db="samp/samp_define.db",
+        source_db="rt/substation.db",
+        result_dir="samp",
+        enable_scheduler=False,
+        root_dir=root,
+    )
+    store = app.state.store
+    ts = calendar.timegm((2026, 6, 15, 10, 0, 0, 0, 0, 0))
+
+    with TestClient(app) as client:
+        # 1. 创建同一采样点同时采集 meter(默认主表) + inverter(独立表)
+        created = client.post(
+            "/api/definitions",
+            json={
+                "name": "station_a",
+                "interval_seconds": 0,
+                "items": [
+                    {
+                        "source_database": "rt/substation.db",
+                        "source_table": "meter",
+                        "target_table": "",
+                        "fields": ["ua", "ia"],
+                        "filter": "status=1",
+                    },
+                    {
+                        "source_database": "rt/substation.db",
+                        "source_table": "inverter",
+                        "target_table": "inverter",
+                        "fields": ["kw"],
+                        "filter": "",
+                    },
+                ],
+            },
+        )
+        assert created.status_code == 200, created.text
+        d = created.json()
+        samp_id = d["id"]
+        assert d["item_count"] == 2
+        assert [it["item_id"] for it in d["items"]] == ["i1", "i2"]
+
+        # 2. 一次采样写入同一 .db 的两张表，并全部同步 RTDB 结构表
+        res = store.run_sample(samp_id, ts)
+        assert res["relative_path"] == "samp/samp_station_a_2026.db"
+        assert res["rows_written"] == 3  # meter 命中 1 行 + inverter 2 行
+        assert res["tables"] == ["samp_station_a_2026", "inverter"]
+        db_file = root / "samp/samp_station_a_2026.db"
+        with closing(sqlite3.connect(db_file)) as conn:
+            reg_tables = {r[0] for r in conn.execute("SELECT table_name FROM rtdb_schema_tables").fetchall()}
+            assert reg_tables == {"samp_station_a_2026", "inverter"}
+
+        # 3. 针对已定义采样点追加第 3 条采集项（跨另一源库 rt/env.db）
+        added = client.post(
+            f"/api/definitions/{samp_id}/items",
+            json={
+                "source_database": "rt/env.db",
+                "source_table": "weather",
+                "target_table": "env_log",
+                "fields": ["humidity"],
+                "filter": "",
+            },
+        )
+        assert added.status_code == 200, added.text
+        assert added.json()["item_count"] == 3
+        third_id = added.json()["items"][2]["item_id"]
+
+        # 4. 修改第 2 条采集项：增加 temp 字段并加过滤 flag=1
+        updated = client.put(
+            f"/api/definitions/{samp_id}/items/i2",
+            json={
+                "source_database": "rt/substation.db",
+                "source_table": "inverter",
+                "target_table": "inverter",
+                "fields": ["kw", "temp"],
+                "filter": "flag=1",
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        res2 = store.run_sample(samp_id, ts + 60)
+        assert res2["tables"] == ["samp_station_a_2026", "inverter", "env_log"]
+        assert res2["rows_written"] == 3  # meter 1 + inverter(flag=1) 1 + weather 1
+
+        # 5. 按 item_id 独立查询表、曲线、row_key 与 CSV 导出
+        q_i1 = client.get(f"/api/query/{samp_id}", params={"start": ts - 10, "end": ts + 120, "item_id": "i1"}).json()
+        assert q_i1["columns"] == ["sample_time", "row_key", "ua", "ia"]
+        assert q_i1["total_rows"] == 2
+
+        q_i2 = client.get(f"/api/query/{samp_id}", params={"start": ts - 10, "end": ts + 120, "item_id": "i2"}).json()
+        assert q_i2["columns"] == ["sample_time", "row_key", "kw", "temp"]
+        assert q_i2["total_rows"] == 3  # ts 时 2 行 + ts+60 时 1 行
+        assert any(r["temp"] == 42.5 for r in q_i2["rows"])
+
+        s_i3 = client.get(
+            f"/api/query/{samp_id}/series",
+            params={"start": ts - 10, "end": ts + 120, "item_id": third_id},
+        ).json()
+        assert s_i3["fields"] == ["humidity"]
+        assert s_i3["row_keys"] == ["north"]
+
+        csv_i3 = client.get(
+            f"/api/query/{samp_id}/export",
+            params={"start": ts - 10, "end": ts + 120, "item_id": third_id},
+        )
+        assert csv_i3.status_code == 200
+        assert "humidity" in csv_i3.text and "55.2" in csv_i3.text
+
+        # 结果库元数据汇总全部 3 张业务表
+        storage = client.get("/api/storage/databases").json()
+        entry = next(it for it in storage["items"] if it["filename"] == "samp_station_a_2026.db")
+        assert entry["table_count"] == 3
+        assert entry["row_count"] == 6  # 2 + 3 + 1
+
+        # 6. 逐条删除采集项，删至最后 1 条时拦截返回 400
+        del3 = client.delete(f"/api/definitions/{samp_id}/items/{third_id}")
+        assert del3.status_code == 200
+        assert del3.json()["item_count"] == 2
+
+        del2 = client.delete(f"/api/definitions/{samp_id}/items/i2")
+        assert del2.status_code == 200
+        assert del2.json()["item_count"] == 1
+
+        del1 = client.delete(f"/api/definitions/{samp_id}/items/i1")
+        assert del1.status_code == 400
+
+
+
+
 
 

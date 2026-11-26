@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import json
 import logging
 import os
 import re
@@ -24,7 +25,16 @@ _CLAUSE_CMP = re.compile(
 )
 _RESULT_KEYS = {"sample_time", "row_key"}
 _ALLOWED_AGGS = {"raw", "avg", "min", "max", "last"}
-SQLITE_DIR = Path(os.getenv("SAMP_SQLITE_DIR", r"D:\codex\sqldb\realtime\samp"))
+_SKIP_SCAN_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", ".playwright-cli", "tmp_results"}
+ROOT_DIR = Path(os.getenv("SAMP_ROOT_DIR", r"D:\codex\workspace"))
+SQLITE_DIR = Path(os.getenv("SAMP_SQLITE_DIR", str(ROOT_DIR / "samp")))
+DEFAULT_DEFINITION_DB: Path = (
+    SQLITE_DIR / "samp_define.db" if "SAMP_SQLITE_DIR" in os.environ else Path("samp/samp_define.db")
+)
+DEFAULT_SOURCE_DB: Path = (
+    SQLITE_DIR / "source.db" if "SAMP_SQLITE_DIR" in os.environ else Path("source.db")
+)
+DEFAULT_RESULT_DIR: Path = SQLITE_DIR if "SAMP_SQLITE_DIR" in os.environ else Path("samp")
 LOGGER = logging.getLogger(__name__)
 
 
@@ -159,13 +169,23 @@ class Store:
 
     def __init__(
         self,
-        definition_db: str | Path = SQLITE_DIR / "samp_define.db",
-        source_db: str | Path = SQLITE_DIR / "source.db",
-        result_dir: str | Path = SQLITE_DIR,
+        definition_db: str | Path = DEFAULT_DEFINITION_DB,
+        source_db: str | Path = DEFAULT_SOURCE_DB,
+        result_dir: str | Path = DEFAULT_RESULT_DIR,
+        root_dir: str | Path | None = None,
     ):
-        self.definition_db = str(definition_db)
-        self.default_source_db = str(source_db)
-        self.result_dir = Path(result_dir)
+        def_path = Path(definition_db)
+        if root_dir is not None:
+            self.root_dir = Path(root_dir).expanduser().resolve()
+        elif def_path.is_absolute():
+            self.root_dir = def_path.expanduser().resolve().parent
+        else:
+            self.root_dir = ROOT_DIR.expanduser().resolve()
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+
+        self.definition_db = str(self.resolve_path(definition_db))
+        self.default_source_db = str(self.resolve_path(source_db))
+        self.result_dir = self.resolve_path(result_dir)
         Path(self.definition_db).parent.mkdir(parents=True, exist_ok=True)
         Path(self.default_source_db).parent.mkdir(parents=True, exist_ok=True)
         self.result_dir.mkdir(parents=True, exist_ok=True)
@@ -179,12 +199,28 @@ class Store:
         self._def_cache_rows: list[dict[str, Any]] | None = None
 
         self._schema_cache_lock = threading.Lock()
-        self._synced_result_schemas: dict[str, dict[str, str]] = {}
+        self._synced_result_schemas: dict[tuple[str, str], dict[str, str]] = {}
         self._meta_cache_lock = threading.Lock()
         self._result_meta_cache: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
 
         self.initialize()
         self._sync_existing_results()
+
+    def resolve_path(self, path: str | Path) -> Path:
+        """将相对路径基于 root_dir 解析为绝对路径；绝对路径保持原样并规范化。"""
+        p = Path(path).expanduser()
+        if not p.is_absolute():
+            p = self.root_dir / p
+        return p.resolve()
+
+    def to_relative_path(self, path: str | Path) -> str:
+        """位于 root_dir 内的路径转为 POSIX 风格相对路径；外部路径保留 POSIX 绝对路径。"""
+        resolved = self.resolve_path(path)
+        try:
+            rel = resolved.relative_to(self.root_dir)
+            return rel.as_posix() if str(rel) != "." else "."
+        except ValueError:
+            return resolved.as_posix()
 
     def _db_lock(self, path: str | Path) -> threading.RLock:
         """获取指定 SQLite 文件对应的分片锁，避免跨库写入互相阻塞。"""
@@ -241,47 +277,392 @@ class Store:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(schema)
             columns = conn.execute("PRAGMA table_info(samp_define)").fetchall()
-            if not any(row[1] == "source_database" for row in columns):
+            col_names = {row[1] for row in columns}
+            if "source_database" not in col_names:
                 conn.execute("ALTER TABLE samp_define ADD COLUMN source_database TEXT NOT NULL DEFAULT ''")
-                columns = conn.execute("PRAGMA table_info(samp_define)").fetchall()
+                col_names.add("source_database")
+            # 仅对标准定义库自动补齐 target_dir/target_name/items_json，兼容旧版极简测试库
+            if "source_table" in col_names:
+                if "target_dir" not in col_names:
+                    conn.execute("ALTER TABLE samp_define ADD COLUMN target_dir TEXT NOT NULL DEFAULT ''")
+                if "target_name" not in col_names:
+                    conn.execute("ALTER TABLE samp_define ADD COLUMN target_name TEXT NOT NULL DEFAULT ''")
+                if "items_json" not in col_names:
+                    conn.execute("ALTER TABLE samp_define ADD COLUMN items_json TEXT NOT NULL DEFAULT ''")
+            columns = conn.execute("PRAGMA table_info(samp_define)").fetchall()
             sync_table(conn, self.definition_db, "samp_define", columns)
         self._invalidate_definition_cache()
 
     def _sync_existing_results(self) -> None:
+        seen: set[str] = set()
+        candidates: list[Path] = []
         for path in self.result_dir.glob("samp_*.db"):
-            if not _RESULT_FILE.fullmatch(path.name) or not path.is_file():
+            if _RESULT_FILE.fullmatch(path.name) and path.is_file():
+                candidates.append(path)
+        try:
+            for item in self.list_definitions():
+                spec = self._parse_target_spec(item["samp_name"], item.get("target_dir", ""), item.get("target_name", ""))
+                for _, path in self._list_spec_result_files(spec):
+                    candidates.append(path)
+        except (sqlite3.Error, ValueError):
+            pass
+
+        for path in candidates:
+            norm = os.path.normcase(str(path.resolve()))
+            if norm in seen or not path.is_file():
                 continue
-            table = path.stem
+            seen.add(norm)
             try:
                 with self._db_lock(path), self._connect(path) as conn:
                     conn.execute("BEGIN IMMEDIATE")
-                    columns = conn.execute(f"PRAGMA table_info({self._quote(table)})").fetchall()
-                    keys = tuple(row[1] for row in sorted(columns, key=lambda row: row[5]) if row[5])
-                    if keys == ("sample_time", "row_key"):
-                        sync_table(conn, path, table, columns)
+                    biz_tables = [
+                        str(r[0])
+                        for r in conn.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                        ).fetchall()
+                        if str(r[0]).lower() not in REGISTRY_TABLES and _IDENT.match(str(r[0]))
+                    ]
+                    for table in biz_tables:
+                        columns = conn.execute(f"PRAGMA table_info({self._quote(table)})").fetchall()
+                        keys = tuple(row[1] for row in sorted(columns, key=lambda row: row[5]) if row[5])
+                        if keys == ("sample_time", "row_key"):
+                            sync_table(conn, path, table, columns)
             except (sqlite3.Error, ValueError) as exc:
                 LOGGER.warning("无法同步历史结果库 %s 的 RTDB 结构：%s", path, exc)
 
-    @staticmethod
-    def _public(row: sqlite3.Row, default_source_db: str = str(SQLITE_DIR / "source.db")) -> dict[str, Any]:
+    def _parse_target_spec(self, samp_name: str, target_dir: str = "", target_name: str = "") -> dict[str, Any]:
+        """解析并校验目标库目录与命名规则。
+
+        规则：
+        - target_dir 为空 -> 默认 result_dir；非空 -> 相对 root_dir 解析；
+        - target_name 为空 -> 按年分库 samp_{samp_name}_{year}.db；
+        - target_name 含 {year} -> 按年分库模板（去掉可选 .db 后缀）；
+        - target_name 以 .db 结尾且不含 {year} -> 单库模式 {stem}.db（不分年）；
+        - 其他非空 target_name -> 按年分库前缀 {target_name}_{year}.db。
+        """
+        raw_dir = str(target_dir or "").strip()
+        if raw_dir:
+            dir_path = self.resolve_path(raw_dir)
+            dir_rel = self.to_relative_path(dir_path)
+        else:
+            dir_path = self.result_dir
+            dir_rel = self.to_relative_path(self.result_dir)
+
+        raw_name = str(target_name or "").strip()
+        if "/" in raw_name or "\\" in raw_name:
+            raise ValueError("target_name 不能包含路径分隔符，请使用 target_dir 指定目录")
+
+        if not raw_name:
+            template = f"samp_{samp_name}_{{year}}"
+            yearly = True
+            sample_stem = template.replace("{year}", "2026")
+            if not _IDENT.match(sample_stem):
+                raise ValueError("采样点名生成的结果表名不合法")
+            single_stem = ""
+            pattern_re = re.compile(rf"^{re.escape(f'samp_{samp_name}_')}(\d{{4}})\.db$")
+        elif "{year}" in raw_name.lower():
+            normalized = re.sub(r"\{year\}", "{year}", raw_name, flags=re.I)
+            if normalized.lower().endswith(".db"):
+                normalized = normalized[:-3]
+            sample_stem = normalized.replace("{year}", "2026")
+            if not _IDENT.match(sample_stem):
+                raise ValueError(f"目标库模板生成的结果表名不合法: {raw_name}")
+            template = normalized
+            yearly = True
+            single_stem = ""
+            parts = normalized.split("{year}")
+            regex_str = "^" + r"(\d{4})".join(re.escape(p) for p in parts) + r"\.db$"
+            pattern_re = re.compile(regex_str)
+        elif raw_name.lower().endswith(".db"):
+            stem = raw_name[:-3]
+            if not _IDENT.match(stem):
+                raise ValueError(f"目标库名不合法: {raw_name}")
+            template = stem
+            yearly = False
+            single_stem = stem
+            pattern_re = re.compile(rf"^{re.escape(stem)}\.db$")
+        else:
+            sample_stem = f"{raw_name}_2026"
+            if not _IDENT.match(sample_stem):
+                raise ValueError(f"目标库前缀不合法: {raw_name}")
+            template = f"{raw_name}_{{year}}"
+            yearly = True
+            single_stem = ""
+            pattern_re = re.compile(rf"^{re.escape(f'{raw_name}_')}(\d{{4}})\.db$")
+
+        # 禁止与定义库或运行态库重名冲突
+        def_norm = os.path.normcase(str(Path(self.definition_db).resolve()))
+        rt_norm = os.path.normcase(str(Path(self.definition_db).resolve().with_name("samp_runtime.db")))
+        probe_file = (dir_path / f"{(single_stem if not yearly else template.replace('{year}', '2026'))}.db").resolve()
+        if os.path.normcase(str(probe_file)) in (def_norm, rt_norm):
+            raise ValueError("目标库不能与 samp_define.db 或 samp_runtime.db 重名")
+
+        conflict_key = (os.path.normcase(str(dir_path.resolve())), template.lower(), yearly)
+        return {
+            "dir_path": dir_path,
+            "dir_rel": dir_rel,
+            "raw_dir": raw_dir,
+            "raw_name": raw_name,
+            "yearly": yearly,
+            "template": template,
+            "single_stem": single_stem,
+            "pattern_re": pattern_re,
+            "conflict_key": conflict_key,
+            "preview_rel": self.to_relative_path(dir_path / f"{template}.db"),
+        }
+
+    def _target_for_timestamp(self, spec: dict[str, Any], sampled_at: int) -> tuple[Path, str]:
+        if spec["yearly"]:
+            year = time.gmtime(sampled_at).tm_year
+            table = spec["template"].replace("{year}", str(year))
+        else:
+            table = spec["single_stem"]
+        if not _IDENT.match(table):
+            raise ValueError(f"生成的结果表名不合法: {table}")
+        return spec["dir_path"] / f"{table}.db", table
+
+    def _spec_from_row(self, row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+        keys = row.keys() if isinstance(row, sqlite3.Row) else row
+        target_dir = row["target_dir"] if "target_dir" in keys else ""
+        target_name = row["target_name"] if "target_name" in keys else ""
+        return self._parse_target_spec(str(row["samp_name"]), str(target_dir or ""), str(target_name or ""))
+
+    def _drop_schema_cache_for_db(self, db_key: str) -> None:
+        with self._schema_cache_lock:
+            stale = [key for key in self._synced_result_schemas if key[0] == db_key]
+            for key in stale:
+                self._synced_result_schemas.pop(key, None)
+
+    def _normalize_items(
+        self,
+        raw_items: Any,
+        fallback: dict[str, Any] | None = None,
+        single_stem: str = "",
+    ) -> list[dict[str, Any]]:
+        """校验并规范化单采样点下的一条或多条采集项（一库多表模型）。"""
+        source_list: list[dict[str, Any]]
+        if isinstance(raw_items, list) and len(raw_items) > 0:
+            source_list = [item for item in raw_items if isinstance(item, dict)]
+            if len(source_list) != len(raw_items):
+                raise ValueError("items 中每一项都必须是对象")
+        elif fallback is not None:
+            source_list = [fallback]
+        else:
+            raise ValueError("采样点至少需要一条采集项")
+
+        normalized: list[dict[str, Any]] = []
+        used_ids: set[str] = set()
+        used_tables: set[str] = set()
+        auto_seq = 1
+
+        for idx, raw in enumerate(source_list):
+            src_db = str(raw.get("source_database") or self.default_source_db).strip()
+            src_table = str(raw.get("source_table") or raw.get("table") or "").strip()
+            tgt_table = str(raw.get("target_table") or "").strip()
+            fields_raw = raw.get("fields", raw.get("field_name", []))
+            if isinstance(fields_raw, str):
+                fields_list = [f.strip() for f in fields_raw.split(",") if f.strip()]
+            elif isinstance(fields_raw, list):
+                fields_list = [str(f).strip() for f in fields_raw if str(f).strip()]
+            else:
+                fields_list = []
+            fields = list(dict.fromkeys(fields_list))
+            filter_expr = str(raw.get("filter", raw.get("filter_value", "")) or "")
+
+            if not src_table or not fields:
+                raise ValueError(f"第 {idx + 1} 条采集项的 source_table 和 fields 不能为空")
+            if not _IDENT.match(src_table) or any(not _IDENT.match(f) for f in fields):
+                raise ValueError("表名与字段名只能包含字母、数字、下划线或中文")
+            if src_table.lower() in REGISTRY_TABLES:
+                raise ValueError("不能使用 RTDB 内置结构表作为数据源")
+            if any(f.lower() in _RESULT_KEYS for f in fields):
+                raise ValueError("sample_time 和 row_key 是结果表保留字段，不能作为采样字段")
+            if len({f.lower() for f in fields}) != len(fields):
+                raise ValueError("同一采集项的采样字段名不能仅大小写不同")
+            if not src_db:
+                raise ValueError("source_database 不能为空")
+            self._validate_source_path(src_db)
+            src_db_rel = self.to_relative_path(src_db)
+            self._parse_filter(filter_expr)
+
+            # 第 1 条留空 target_table 表示默认写入库同名表（兼容历史）；第 2 条起留空默认用 source_table
+            if not tgt_table and idx > 0:
+                tgt_table = src_table
+            if tgt_table:
+                if not _IDENT.match(tgt_table):
+                    raise ValueError(f"目标表名不合法: {tgt_table}")
+                if tgt_table.lower() in REGISTRY_TABLES:
+                    raise ValueError(f"目标表名不能使用 RTDB 保留表名: {tgt_table}")
+
+            table_key = tgt_table.lower() if tgt_table else "__default__"
+            if single_stem and tgt_table and tgt_table.lower() == single_stem.lower() and "__default__" in used_tables:
+                raise ValueError(f"目标表名“{tgt_table}”与默认表冲突，请指定不同的目标表名")
+            if table_key in used_tables:
+                label = tgt_table or "默认表"
+                raise ValueError(f"同一采样点内目标表名重复（{label}），请为每条采集项指定唯一目标表名")
+            used_tables.add(table_key)
+
+            raw_id = str(raw.get("item_id") or "").strip()
+            if raw_id and _IDENT.match(raw_id) and raw_id not in used_ids:
+                item_id = raw_id
+            else:
+                while f"i{auto_seq}" in used_ids:
+                    auto_seq += 1
+                item_id = f"i{auto_seq}"
+                auto_seq += 1
+            used_ids.add(item_id)
+
+            normalized.append(
+                {
+                    "item_id": item_id,
+                    "source_database": src_db_rel,
+                    "source_table": src_table,
+                    "target_table": tgt_table,
+                    "fields": fields,
+                    "filter": filter_expr,
+                }
+            )
+        return normalized
+
+    def _items_from_row(
+        self,
+        row: sqlite3.Row | dict[str, Any],
+        default_source_db: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """从 samp_define 行读取多采集项配置；无 items_json 时自动回退为单条采集项。"""
+        keys = row.keys() if isinstance(row, sqlite3.Row) else row
+        raw_json = str(row["items_json"] or "").strip() if "items_json" in keys else ""
+        if raw_json:
+            try:
+                parsed = json.loads(raw_json)
+                if isinstance(parsed, list) and parsed:
+                    items_out: list[dict[str, Any]] = []
+                    for idx, item in enumerate(parsed):
+                        if not isinstance(item, dict):
+                            continue
+                        raw_src = item.get("source_database") or default_source_db or self.default_source_db
+                        fields = item.get("fields") or []
+                        if isinstance(fields, str):
+                            fields = [f for f in fields.split(",") if f]
+                        items_out.append(
+                            {
+                                "item_id": str(item.get("item_id") or f"i{idx + 1}"),
+                                "source_database": self.to_relative_path(raw_src),
+                                "source_table": str(item.get("source_table") or ""),
+                                "target_table": str(item.get("target_table") or ""),
+                                "fields": [str(f) for f in fields if str(f)],
+                                "filter": str(item.get("filter") or ""),
+                            }
+                        )
+                    if items_out:
+                        return items_out
+            except (ValueError, TypeError):
+                pass
+        raw_src = (row["source_database"] if "source_database" in keys else "") or default_source_db or self.default_source_db
+        field_str = str(row["field_name"] or "") if "field_name" in keys else ""
+        return [
+            {
+                "item_id": "i1",
+                "source_database": self.to_relative_path(raw_src),
+                "source_table": str(row["source_table"] or "") if "source_table" in keys else "",
+                "target_table": "",
+                "fields": [f for f in field_str.split(",") if f],
+                "filter": str(row["filter_value"] or "") if "filter_value" in keys else "",
+            }
+        ]
+
+    def _select_item(self, raw: sqlite3.Row, item_id: str | None = None) -> dict[str, Any]:
+        """按 item_id（或 target_table）选定采样点内的一条采集项，默认返回首条。"""
+        items = self._items_from_row(raw)
+        if not item_id:
+            return items[0]
+        target = str(item_id).strip()
+        for item in items:
+            if item["item_id"] == target:
+                return item
+        for item in items:
+            if item["target_table"] and item["target_table"].lower() == target.lower():
+                return item
+        raise ValueError(f"采集项不存在: {item_id}")
+
+    def _iter_targets_for_range(
+        self,
+        raw: sqlite3.Row,
+        start: int,
+        end: int,
+        order: str = "asc",
+        item_id: str | None = None,
+    ) -> list[tuple[Path, str]]:
+        spec = self._spec_from_row(raw)
+        item = self._select_item(raw, item_id)
+        custom_table = item["target_table"]
+        if not spec["yearly"]:
+            stem = spec["single_stem"]
+            return [(spec["dir_path"] / f"{stem}.db", custom_table or stem)]
+        targets: list[tuple[Path, str]] = []
+        for year in self._year_sequence(start, end, order):
+            stem = spec["template"].replace("{year}", str(year))
+            targets.append((spec["dir_path"] / f"{stem}.db", custom_table or stem))
+        return targets
+
+    def _list_spec_result_files(self, spec: dict[str, Any]) -> list[tuple[int | None, Path]]:
+        dir_path: Path = spec["dir_path"]
+        if not dir_path.exists() or not dir_path.is_dir():
+            return []
+        if not spec["yearly"]:
+            single = dir_path / f"{spec['single_stem']}.db"
+            return [(None, single)] if single.is_file() else []
+        found: list[tuple[int | None, Path]] = []
+        regex: re.Pattern[str] = spec["pattern_re"]
+        for path in sorted(dir_path.glob("*.db")):
+            if not path.is_file():
+                continue
+            match = regex.fullmatch(path.name)
+            if match:
+                found.append((int(match.group(1)), path))
+        return found
+
+    def _public(self, row: sqlite3.Row, default_source_db: str | None = None) -> dict[str, Any]:
         data = dict(row)
-        data["fields"] = [x for x in data.pop("field_name", "").split(",") if x]
+        items = self._items_from_row(row, default_source_db)
+        primary = items[0]
+        data.pop("field_name", None)
+        data.pop("filter_value", None)
+        data.pop("items_json", None)
         data["interval_seconds"] = data.pop("samp_time", 60)
-        data["filter"] = data.pop("filter_value", "")
-        data["source_database"] = data.get("source_database") or default_source_db
+        data["source_database"] = primary["source_database"]
+        data["source_table"] = primary["source_table"]
+        data["fields"] = list(primary["fields"])
+        data["filter"] = primary["filter"]
+        data["items"] = items
+        data["item_count"] = len(items)
+        target_dir = str(data.get("target_dir") or "")
+        target_name = str(data.get("target_name") or "")
+        data["target_dir"] = self.to_relative_path(target_dir) if target_dir else ""
+        data["target_name"] = target_name
+        try:
+            spec = self._parse_target_spec(str(data.get("samp_name") or ""), target_dir, target_name)
+            data["target_preview"] = spec["preview_rel"]
+        except ValueError:
+            data["target_preview"] = ""
         for key in ("samp_type", "trigger_time", "created_at", "updated_at"):
             data.pop(key, None)
         return data
+
+    @staticmethod
+    def _clone_definition(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **item,
+            "fields": list(item["fields"]),
+            "items": [{**sub, "fields": list(sub["fields"])} for sub in item.get("items", [])],
+        }
 
     def list_definitions(self) -> list[dict[str, Any]]:
         """获取全部采样定义（带文件 mtime 与版本号缓存）。"""
         with self._def_cache_lock:
             stamp = self._definition_file_stamp()
             if self._def_cache_rows is not None and self._def_cache_key == stamp:
-                return [
-                    {**item, "fields": list(item["fields"])}
-                    for item in self._def_cache_rows
-                ]
+                return [self._clone_definition(item) for item in self._def_cache_rows]
         with self._connect(self.definition_db) as conn:
             rows = [
                 self._public(row, self.default_source_db)
@@ -290,66 +671,73 @@ class Store:
         with self._def_cache_lock:
             self._def_cache_rows = rows
             self._def_cache_key = self._definition_file_stamp()
-        return [{**item, "fields": list(item["fields"])} for item in rows]
+        return [self._clone_definition(item) for item in rows]
 
     def get_definition(self, samp_id: int) -> dict[str, Any] | None:
         with self._connect(self.definition_db) as conn:
             row = conn.execute("SELECT * FROM samp_define WHERE id=?", (samp_id,)).fetchone()
         return self._public(row, self.default_source_db) if row else None
 
-    def _rename_result_databases(self, old_name: str, new_name: str) -> list[str]:
-        """将旧采样点名对应的全部年度结果库同步重命名为新名称并更新 RTDB 结构登记。"""
-        prefix = f"samp_{old_name}_"
+    def _migrate_result_databases(self, old_spec: dict[str, Any], new_spec: dict[str, Any]) -> list[str]:
+        """将旧目标规格下的全部结果库迁移至新目录/新库名并同步更新 RTDB 结构登记。"""
+        if old_spec["conflict_key"] == new_spec["conflict_key"]:
+            return []
+        existing_files = self._list_spec_result_files(old_spec)
+        if not existing_files:
+            return []
+        if old_spec["yearly"] != new_spec["yearly"]:
+            raise ValueError("不支持在按年分库模式与单库模式之间自动迁移历史库，请取消勾选同步迁移")
+
         pairs: list[tuple[Path, Path, str, str]] = []
-        for src_path in sorted(self.result_dir.glob(f"{prefix}*.db")):
-            if not src_path.is_file():
-                continue
-            suffix = src_path.stem[len(prefix):]
-            if len(suffix) != 4 or not suffix.isdigit():
-                continue
+        for year, src_path in existing_files:
             old_table = src_path.stem
-            new_table = f"samp_{new_name}_{suffix}"
+            if new_spec["yearly"]:
+                new_table = new_spec["template"].replace("{year}", str(year))
+            else:
+                new_table = new_spec["single_stem"]
             if not _IDENT.match(new_table):
-                raise ValueError(f"新采样点名生成的结果表名不合法: {new_table}")
-            dst_path = self.result_dir / f"{new_table}.db"
-            if dst_path.exists():
-                raise ValueError(f"目标结果库已存在，无法迁移: {dst_path.name}")
+                raise ValueError(f"新目标生成的结果表名不合法: {new_table}")
+            dst_path = new_spec["dir_path"] / f"{new_table}.db"
+            if dst_path.exists() and dst_path.resolve() != src_path.resolve():
+                raise ValueError(f"目标结果库已存在，无法迁移: {self.to_relative_path(dst_path)}")
             pairs.append((src_path, dst_path, old_table, new_table))
 
         migrated: list[str] = []
+        new_spec["dir_path"].mkdir(parents=True, exist_ok=True)
         for src_path, dst_path, old_table, new_table in pairs:
             src_key = os.path.normcase(str(src_path.resolve()))
             dst_key = os.path.normcase(str(dst_path.resolve()))
             with self._db_lock(src_path), self._db_lock(dst_path):
-                with self._connect(src_path) as conn:
-                    conn.execute("BEGIN IMMEDIATE")
-                    exists = conn.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (old_table,)
-                    ).fetchone()
-                    if exists:
-                        conn.execute(f"ALTER TABLE {self._quote(old_table)} RENAME TO {self._quote(new_table)}")
-                        if conn.execute(
-                            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rtdb_schema_tables'"
-                        ).fetchone():
-                            conn.execute("DELETE FROM rtdb_schema_columns WHERE table_name=?", (old_table,))
-                            conn.execute("DELETE FROM rtdb_schema_tables WHERE table_name=?", (old_table,))
-                        if conn.execute(
-                            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rtdb_schema_database'"
-                        ).fetchone():
-                            conn.execute(
-                                "UPDATE rtdb_schema_database SET eng_name=?, chn_name=? WHERE version=1",
-                                (new_table, new_table),
-                            )
-                        cols = conn.execute(f"PRAGMA table_info({self._quote(new_table)})").fetchall()
-                        sync_table(conn, dst_path, new_table, cols)
-                src_path.rename(dst_path)
-                for suffix in ("-wal", "-shm", "-journal"):
-                    extra = Path(f"{src_path}{suffix}")
-                    if extra.exists():
-                        extra.unlink(missing_ok=True)
-            with self._schema_cache_lock:
-                self._synced_result_schemas.pop(src_key, None)
-                self._synced_result_schemas.pop(dst_key, None)
+                if old_table != new_table:
+                    with self._connect(src_path) as conn:
+                        conn.execute("BEGIN IMMEDIATE")
+                        exists = conn.execute(
+                            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (old_table,)
+                        ).fetchone()
+                        if exists:
+                            conn.execute(f"ALTER TABLE {self._quote(old_table)} RENAME TO {self._quote(new_table)}")
+                            if conn.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rtdb_schema_tables'"
+                            ).fetchone():
+                                conn.execute("DELETE FROM rtdb_schema_columns WHERE table_name=?", (old_table,))
+                                conn.execute("DELETE FROM rtdb_schema_tables WHERE table_name=?", (old_table,))
+                            if conn.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rtdb_schema_database'"
+                            ).fetchone():
+                                conn.execute(
+                                    "UPDATE rtdb_schema_database SET eng_name=?, chn_name=? WHERE version=1",
+                                    (new_table, new_table),
+                                )
+                            cols = conn.execute(f"PRAGMA table_info({self._quote(new_table)})").fetchall()
+                            sync_table(conn, dst_path, new_table, cols)
+                if src_path.resolve() != dst_path.resolve():
+                    src_path.rename(dst_path)
+                    for suffix in ("-wal", "-shm", "-journal"):
+                        extra = Path(f"{src_path}{suffix}")
+                        if extra.exists():
+                            extra.unlink(missing_ok=True)
+            self._drop_schema_cache_for_db(src_key)
+            self._drop_schema_cache_for_db(dst_key)
             with self._meta_cache_lock:
                 self._result_meta_cache.pop(src_key, None)
                 self._result_meta_cache.pop(dst_key, None)
@@ -363,70 +751,154 @@ class Store:
         rename_results: bool = False,
     ) -> dict[str, Any]:
         name = str(payload.get("name") or payload.get("samp_name") or "").strip()
-        source_database = str(payload.get("source_database") or self.default_source_db).strip()
-        source_table = str(payload.get("source_table") or payload.get("table") or "").strip()
-        fields = payload.get("fields", payload.get("field_name", []))
-        if isinstance(fields, str):
-            fields = [field.strip() for field in fields.split(",") if field.strip()]
-        fields = list(dict.fromkeys(str(field).strip() for field in fields if str(field).strip()))
+        raw_target_dir = str(payload.get("target_dir") or "").strip()
+        raw_target_name = str(payload.get("target_name") or "").strip()
         interval = int(payload.get("interval_seconds", payload.get("samp_time", 60)))
         do_rename = bool(rename_results or payload.get("rename_results", False))
-        if not name or not source_table or not fields:
-            raise ValueError("name、source_database、source_table 和 fields 不能为空")
-        if not _IDENT.match(name) or not _IDENT.match(source_table) or any(not _IDENT.match(field) for field in fields):
-            raise ValueError("名称只能包含字母、数字、下划线或中文")
-        if any(field.lower() in _RESULT_KEYS for field in fields):
-            raise ValueError("sample_time 和 row_key 是结果表保留字段，不能作为采样字段")
-        if len({field.lower() for field in fields}) != len(fields):
-            raise ValueError("采样字段名不能仅大小写不同")
-        if not source_database:
-            raise ValueError("source_database 不能为空")
-        self._validate_source_path(source_database)
+        if not name:
+            raise ValueError("name 不能为空")
+        if not _IDENT.match(name):
+            raise ValueError("采样点名称只能包含字母、数字、下划线或中文")
         if interval < 0:
             raise ValueError("interval_seconds 不能为负数")
-        filter_expr = str(payload.get("filter", payload.get("filter_value", "")))
-        self._parse_filter(filter_expr)
+
+        new_spec = self._parse_target_spec(name, raw_target_dir, raw_target_name)
+        target_dir_stored = self.to_relative_path(new_spec["dir_path"]) if raw_target_dir else ""
+        # 校验目标库不与其他采样定义冲突
+        for other in self.list_definitions():
+            if samp_id is not None and int(other["id"]) == int(samp_id):
+                continue
+            other_spec = self._parse_target_spec(
+                other["samp_name"], other.get("target_dir", ""), other.get("target_name", "")
+            )
+            if other_spec["conflict_key"] == new_spec["conflict_key"]:
+                raise ValueError(f"目标库与采样点“{other['samp_name']}”冲突: {new_spec['preview_rel']}")
+
+        raw_items = payload.get("items")
+        fallback_item = {
+            "item_id": "i1",
+            "source_database": payload.get("source_database") or self.default_source_db,
+            "source_table": payload.get("source_table") or payload.get("table") or "",
+            "target_table": str(payload.get("target_table") or ""),
+            "fields": payload.get("fields", payload.get("field_name", [])),
+            "filter": payload.get("filter", payload.get("filter_value", "")),
+        }
+        items = self._normalize_items(raw_items, fallback_item, single_stem=new_spec["single_stem"])
+        primary = items[0]
+        items_json = json.dumps(items, ensure_ascii=False)
+
         now = int(time.time())
         values = (
             name,
-            source_database,
-            source_table,
-            ",".join(fields),
+            primary["source_database"],
+            primary["source_table"],
+            target_dir_stored,
+            raw_target_name,
+            items_json,
+            ",".join(primary["fields"]),
             1,
             interval,
-            filter_expr,
+            primary["filter"],
             int(bool(payload.get("enabled", True))),
             0,
             now,
             now,
         )
-        old_name: str | None = None
         migrated_files: list[str] = []
         with self._db_lock(self.definition_db), self._connect(self.definition_db) as conn:
             if samp_id is None:
                 samp_id = int(
                     conn.execute(
-                        "INSERT INTO samp_define(samp_name,source_database,source_table,field_name,samp_type,samp_time,filter_value,enabled,trigger_time,created_at,updated_at) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO samp_define(samp_name,source_database,source_table,target_dir,target_name,items_json,field_name,samp_type,samp_time,filter_value,enabled,trigger_time,created_at,updated_at) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         values,
                     ).lastrowid
                 )
             else:
-                prev = conn.execute("SELECT samp_name FROM samp_define WHERE id=?", (samp_id,)).fetchone()
-                if prev is not None:
-                    old_name = str(prev["samp_name"])
-                if do_rename and old_name and old_name != name:
-                    # 先校验目标结果库不冲突并迁移，若失败不更新定义名
-                    migrated_files = self._rename_result_databases(old_name, name)
+                prev = conn.execute("SELECT * FROM samp_define WHERE id=?", (samp_id,)).fetchone()
+                if prev is not None and do_rename:
+                    old_spec = self._spec_from_row(prev)
+                    if old_spec["conflict_key"] != new_spec["conflict_key"]:
+                        migrated_files = self._migrate_result_databases(old_spec, new_spec)
                 conn.execute(
-                    "UPDATE samp_define SET samp_name=?,source_database=?,source_table=?,field_name=?,samp_type=?,samp_time=?,filter_value=?,enabled=?,trigger_time=?,updated_at=? WHERE id=?",
-                    (*values[:9], values[10], samp_id),
+                    "UPDATE samp_define SET samp_name=?,source_database=?,source_table=?,target_dir=?,target_name=?,items_json=?,field_name=?,samp_type=?,samp_time=?,filter_value=?,enabled=?,trigger_time=?,updated_at=? WHERE id=?",
+                    (*values[:12], values[13], samp_id),
                 )
         self._invalidate_definition_cache()
         result = self.get_definition(samp_id)  # type: ignore[return-value]
         if migrated_files:
             result["migrated_results"] = migrated_files
         return result
+
+    def add_definition_item(self, samp_id: int, item_payload: dict[str, Any]) -> dict[str, Any]:
+        """向已定义的采样点追加一条采集项（同库独立表）。"""
+        current = self.get_definition(samp_id)
+        if not current:
+            raise KeyError("采样定义不存在")
+        items = [{**it, "fields": list(it["fields"])} for it in current["items"]]
+        new_item = dict(item_payload)
+        if not str(new_item.get("target_table") or "").strip():
+            new_item["target_table"] = str(new_item.get("source_table") or "").strip()
+        items.append(new_item)
+        return self.upsert_definition(
+            {
+                "name": current["samp_name"],
+                "target_dir": current.get("target_dir", ""),
+                "target_name": current.get("target_name", ""),
+                "interval_seconds": current["interval_seconds"],
+                "enabled": bool(current["enabled"]),
+                "items": items,
+            },
+            samp_id=samp_id,
+        )
+
+    def update_definition_item(self, samp_id: int, item_id: str, item_payload: dict[str, Any]) -> dict[str, Any]:
+        """修改指定采样点内某一条采集项（源库/源表/目标表/字段/过滤）。"""
+        current = self.get_definition(samp_id)
+        if not current:
+            raise KeyError("采样定义不存在")
+        items = [{**it, "fields": list(it["fields"])} for it in current["items"]]
+        idx = next((i for i, it in enumerate(items) if it["item_id"] == item_id), -1)
+        if idx < 0:
+            raise KeyError(f"采集项不存在: {item_id}")
+        merged = {**items[idx], **item_payload}
+        merged["item_id"] = str(item_payload.get("item_id") or item_id)
+        items[idx] = merged
+        return self.upsert_definition(
+            {
+                "name": current["samp_name"],
+                "target_dir": current.get("target_dir", ""),
+                "target_name": current.get("target_name", ""),
+                "interval_seconds": current["interval_seconds"],
+                "enabled": bool(current["enabled"]),
+                "items": items,
+            },
+            samp_id=samp_id,
+        )
+
+    def delete_definition_item(self, samp_id: int, item_id: str) -> dict[str, Any]:
+        """从指定采样点移除一条采集项（至少保留一条）。"""
+        current = self.get_definition(samp_id)
+        if not current:
+            raise KeyError("采样定义不存在")
+        items = [{**it, "fields": list(it["fields"])} for it in current["items"]]
+        idx = next((i for i, it in enumerate(items) if it["item_id"] == item_id), -1)
+        if idx < 0:
+            raise KeyError(f"采集项不存在: {item_id}")
+        if len(items) <= 1:
+            raise ValueError("采样点至少保留一条采集项，如需移除请删除整个采样点")
+        items.pop(idx)
+        return self.upsert_definition(
+            {
+                "name": current["samp_name"],
+                "target_dir": current.get("target_dir", ""),
+                "target_name": current.get("target_name", ""),
+                "interval_seconds": current["interval_seconds"],
+                "enabled": bool(current["enabled"]),
+                "items": items,
+            },
+            samp_id=samp_id,
+        )
 
     def export_definitions(self) -> dict[str, Any]:
         """导出全部采样定义为可迁移的 JSON 结构。"""
@@ -435,14 +907,28 @@ class Store:
                 "name": d["samp_name"],
                 "source_database": d["source_database"],
                 "source_table": d["source_table"],
+                "target_dir": d.get("target_dir", ""),
+                "target_name": d.get("target_name", ""),
                 "fields": d["fields"],
+                "items": d.get("items", []),
                 "interval_seconds": d["interval_seconds"],
                 "filter": d["filter"],
                 "enabled": bool(d["enabled"]),
             }
             for d in self.list_definitions()
         ]
-        return {"version": 1, "exported_at": int(time.time()), "count": len(items), "items": items}
+        return {"version": 2, "exported_at": int(time.time()), "count": len(items), "items": items}
+
+    def list_target_dirs(self) -> list[str]:
+        """返回默认结果目录与所有定义中出现过的目标目录（相对路径）。"""
+        dirs: list[str] = [self.to_relative_path(self.result_dir)]
+        seen = {dirs[0]}
+        for item in self.list_definitions():
+            td = item.get("target_dir") or ""
+            if td and td not in seen:
+                seen.add(td)
+                dirs.append(td)
+        return dirs
 
     def import_definitions(self, items: Iterable[dict[str, Any]], mode: str = "skip") -> dict[str, Any]:
         """批量导入采样定义，支持 skip（跳过同名）或 overwrite（覆盖同名）。"""
@@ -516,14 +1002,14 @@ class Store:
         return [Path(part).expanduser().resolve() for part in parts]
 
     def _validate_source_path(self, source_database: str) -> str:
+        resolved = self.resolve_path(source_database)
         allowed = self._allowed_source_dirs()
         if not allowed:
-            return source_database
-        resolved = Path(source_database).expanduser().resolve()
+            return str(resolved)
         for base in allowed:
             try:
                 resolved.relative_to(base)
-                return source_database
+                return str(resolved)
             except ValueError:
                 continue
         raise ValueError("源数据库路径不在 SAMP_ALLOWED_SOURCE_DIRS 允许范围内")
@@ -532,8 +1018,28 @@ class Store:
         target = str(source_database or self.default_source_db)
         return self._validate_source_path(target)
 
+    def _iter_db_files(self, base_dir: Path, max_depth: int = 4) -> Iterator[Path]:
+        """在指定目录下按有限深度递归扫描 .db 文件，跳过缓存与版本库目录。"""
+        if not base_dir.exists() or not base_dir.is_dir():
+            return
+        stack: list[tuple[Path, int]] = [(base_dir, 0)]
+        while stack:
+            current, depth = stack.pop()
+            try:
+                entries = sorted(current.iterdir(), key=lambda p: p.name.lower())
+            except OSError:
+                continue
+            for entry in entries:
+                if entry.is_file() and entry.suffix.lower() == ".db":
+                    yield entry
+                elif entry.is_dir() and depth < max_depth:
+                    name = entry.name
+                    if name.startswith(".") or name in _SKIP_SCAN_DIRS:
+                        continue
+                    stack.append((entry, depth + 1))
+
     def list_source_databases(self) -> list[str]:
-        """扫描可用源 SQLite 数据库文件（排除定义库、运行态库与年度结果库）。"""
+        """扫描 root_dir 及允许目录下的可用源 SQLite 文件，统一返回相对路径。"""
         candidates: list[str] = []
         seen: set[str] = set()
         def_path = Path(self.definition_db).expanduser().resolve()
@@ -541,37 +1047,47 @@ class Store:
             os.path.normcase(str(def_path)),
             os.path.normcase(str(def_path.with_name("samp_runtime.db"))),
         }
+        # 排除全部已声明的自定义目标结果库，防止误把结果库选作源库
+        for item in self.list_definitions():
+            try:
+                spec = self._parse_target_spec(item["samp_name"], item.get("target_dir", ""), item.get("target_name", ""))
+                for _, res_file in self._list_spec_result_files(spec):
+                    excluded_norms.add(os.path.normcase(str(res_file.resolve())))
+            except ValueError:
+                pass
 
-        def add_path(path: Path) -> None:
-            resolved = path.expanduser().resolve()
+        def add_path(path: str | Path) -> None:
+            resolved = self.resolve_path(path)
             norm = os.path.normcase(str(resolved))
             if norm in seen or norm in excluded_norms:
                 return
             if _RESULT_FILE.fullmatch(resolved.name):
                 return
             seen.add(norm)
-            candidates.append(str(resolved).replace("\\", "/"))
+            candidates.append(self.to_relative_path(resolved))
 
-        default_path = Path(self.default_source_db)
-        add_path(default_path)
-
-        scan_dirs = [self.result_dir, default_path.parent, *self._allowed_source_dirs()]
-        for directory in scan_dirs:
-            if not directory.exists() or not directory.is_dir():
+        # 优先收集已真实存在的源库，再保底纳入默认源库与已引用源库
+        scan_roots = [self.root_dir, self.result_dir, Path(self.default_source_db).parent, *self._allowed_source_dirs()]
+        scanned_roots: set[str] = set()
+        for directory in scan_roots:
+            dir_norm = os.path.normcase(str(directory.expanduser().resolve()))
+            if dir_norm in scanned_roots:
                 continue
-            for db_file in sorted(directory.glob("*.db")):
-                if db_file.is_file():
-                    add_path(db_file)
+            scanned_roots.add(dir_norm)
+            for db_file in self._iter_db_files(directory, max_depth=4):
+                add_path(db_file)
 
-        # 同时纳入已在采样定义中使用过的源库路径
+        add_path(self.default_source_db)
+
         for definition in self.list_definitions():
-            src = definition.get("source_database")
-            if src:
-                try:
-                    self._validate_source_path(src)
-                    add_path(Path(src))
-                except ValueError:
-                    pass
+            for sub in definition.get("items") or [{"source_database": definition.get("source_database")}]:
+                src = sub.get("source_database")
+                if src:
+                    try:
+                        self._validate_source_path(src)
+                        add_path(src)
+                    except ValueError:
+                        pass
         return candidates
 
     def source_tables(self, source_database: str | None = None) -> list[str]:
@@ -613,12 +1129,16 @@ class Store:
         db_norm = os.path.normcase(str(Path(database).expanduser().resolve()))
         existing_by_table: dict[str, list[str]] = {}
         for item in self.list_definitions():
-            src = item.get("source_database") or self.default_source_db
-            try:
-                if os.path.normcase(str(Path(src).expanduser().resolve())) == db_norm:
-                    existing_by_table.setdefault(str(item["source_table"]), []).append(str(item["samp_name"]))
-            except OSError:
-                pass
+            for sub in item.get("items") or [item]:
+                src = sub.get("source_database") or self.default_source_db
+                src_tbl = str(sub.get("source_table") or "")
+                try:
+                    if src_tbl and os.path.normcase(str(self.resolve_path(src))) == db_norm:
+                        lst = existing_by_table.setdefault(src_tbl, [])
+                        if str(item["samp_name"]) not in lst:
+                            lst.append(str(item["samp_name"]))
+                except OSError:
+                    pass
 
         tables_out: list[dict[str, Any]] = []
         with self._connect_readonly(database) as conn:
@@ -655,7 +1175,7 @@ class Store:
                         "existing_definitions": existing_by_table.get(tbl, []),
                     }
                 )
-        return {"source_database": database, "tables": tables_out}
+        return {"source_database": self.to_relative_path(database), "tables": tables_out}
 
     def _source_table(self, source_table: str) -> str:
         if source_table.lower() in REGISTRY_TABLES:
@@ -770,7 +1290,7 @@ class Store:
                 except sqlite3.Error:
                     pass
         return {
-            "source_database": database,
+            "source_database": self.to_relative_path(database),
             "source_table": source_table,
             "fields": columns,
             "field_types": col_types,
@@ -888,82 +1408,112 @@ class Store:
         started = time.perf_counter()
         sampled_at = int(time.time() if sampled_at is None else sampled_at)
         definition = self._raw_definition(samp_id)
-        fields = [field for field in definition["field_name"].split(",") if field]
-        rows, field_types = self._read_source(
-            definition["source_database"] or self.default_source_db,
-            definition["source_table"],
-            definition["filter_value"],
-            fields,
-        )
-        table = self._result_name(definition["samp_name"], sampled_at)
-        db_path = self.result_dir / f"{table}.db"
-        table_sql = self._quote(table)
-        quoted_fields = [self._quote(field) for field in fields]
+        items = self._items_from_row(definition)
+        spec = self._spec_from_row(definition)
+        db_path, default_table = self._target_for_timestamp(spec, sampled_at)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
         db_key = os.path.normcase(str(db_path.resolve()))
+
+        # 先全部只读采样源数据，减少目标结果库写锁持有时长
+        prepared: list[tuple[dict[str, Any], list[tuple[str, dict[str, Any]]], dict[str, str]]] = []
+        for item in items:
+            fields = list(item["fields"])
+            rows, field_types = self._read_source(
+                item["source_database"] or self.default_source_db,
+                item["source_table"],
+                item["filter"],
+                fields,
+            )
+            prepared.append((item, rows, field_types))
+
+        total_written = 0
+        tables_written: list[str] = []
+        item_results: list[dict[str, Any]] = []
 
         with self._db_lock(db_path), self._connect(db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            need_schema_sync = True
-            with self._schema_cache_lock:
-                cached = self._synced_result_schemas.get(db_key)
-                if cached is not None and db_path.exists():
-                    if all(field.lower() in cached for field in fields):
-                        need_schema_sync = False
+            for item, rows, field_types in prepared:
+                fields = list(item["fields"])
+                table = item["target_table"] or default_table
+                table_sql = self._quote(table)
+                quoted_fields = [self._quote(field) for field in fields]
+                schema_key = (db_key, table.lower())
+                idx_name = self._quote(f"idx_{table}_rk_t")
 
-            if need_schema_sync:
-                info = conn.execute(f"PRAGMA table_info({table_sql})").fetchall()
-                if not info:
-                    col_sql = ", ".join(
-                        [
-                            "sample_time INTEGER NOT NULL",
-                            "row_key TEXT NOT NULL",
-                            *(f"{quoted} {field_types[field]}" for field, quoted in zip(fields, quoted_fields)),
-                        ]
+                need_schema_sync = True
+                with self._schema_cache_lock:
+                    cached = self._synced_result_schemas.get(schema_key)
+                    if cached is not None and db_path.exists():
+                        if all(field.lower() in cached for field in fields):
+                            need_schema_sync = False
+
+                if need_schema_sync:
+                    info = conn.execute(f"PRAGMA table_info({table_sql})").fetchall()
+                    if not info:
+                        col_sql = ", ".join(
+                            [
+                                "sample_time INTEGER NOT NULL",
+                                "row_key TEXT NOT NULL",
+                                *(f"{quoted} {field_types[field]}" for field, quoted in zip(fields, quoted_fields)),
+                            ]
+                        )
+                        conn.execute(f"CREATE TABLE {table_sql} ({col_sql}, PRIMARY KEY(sample_time,row_key))")
+                        conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_sql} (row_key, sample_time)")
+                    else:
+                        existing = {row[1].lower() for row in info}
+                        for field, quoted in zip(fields, quoted_fields):
+                            if field.lower() not in existing:
+                                conn.execute(f"ALTER TABLE {table_sql} ADD COLUMN {quoted} {field_types[field]}")
+                        conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_sql} (row_key, sample_time)")
+                    latest_info = conn.execute(f"PRAGMA table_info({table_sql})").fetchall()
+                    sync_table(conn, db_path, table, latest_info)
+                    with self._schema_cache_lock:
+                        self._synced_result_schemas[schema_key] = {
+                            str(row[1]).lower(): _normalize_sql_type(str(row[2])) for row in latest_info
+                        }
+
+                columns = ["sample_time", "row_key", *quoted_fields]
+                placeholders = ",".join("?" for _ in columns)
+                updates = ", ".join(f"{field}=excluded.{field}" for field in quoted_fields)
+                try:
+                    conn.executemany(
+                        f"INSERT INTO {table_sql} ({', '.join(columns)}) VALUES ({placeholders}) "
+                        f"ON CONFLICT(sample_time,row_key) DO UPDATE SET {updates}",
+                        ((sampled_at, key, *(values[field] for field in fields)) for key, values in rows),
                     )
-                    conn.execute(f"CREATE TABLE {table_sql} ({col_sql}, PRIMARY KEY(sample_time,row_key))")
-                    conn.execute(f'CREATE INDEX IF NOT EXISTS "idx_row_key_time" ON {table_sql} (row_key, sample_time)')
-                else:
-                    existing = {row[1].lower() for row in info}
-                    for field, quoted in zip(fields, quoted_fields):
-                        if field.lower() not in existing:
-                            conn.execute(f"ALTER TABLE {table_sql} ADD COLUMN {quoted} {field_types[field]}")
-                    conn.execute(f'CREATE INDEX IF NOT EXISTS "idx_row_key_time" ON {table_sql} (row_key, sample_time)')
-                latest_info = conn.execute(f"PRAGMA table_info({table_sql})").fetchall()
-                sync_table(conn, db_path, table, latest_info)
-                with self._schema_cache_lock:
-                    self._synced_result_schemas[db_key] = {
-                        str(row[1]).lower(): _normalize_sql_type(str(row[2])) for row in latest_info
+                except sqlite3.Error:
+                    with self._schema_cache_lock:
+                        self._synced_result_schemas.pop(schema_key, None)
+                    raise
+                total_written += len(rows)
+                tables_written.append(table)
+                item_results.append(
+                    {
+                        "item_id": item["item_id"],
+                        "source_table": item["source_table"],
+                        "table": table,
+                        "rows_written": len(rows),
                     }
-
-            columns = ["sample_time", "row_key", *quoted_fields]
-            placeholders = ",".join("?" for _ in columns)
-            updates = ", ".join(f"{field}=excluded.{field}" for field in quoted_fields)
-            try:
-                conn.executemany(
-                    f"INSERT INTO {table_sql} ({', '.join(columns)}) VALUES ({placeholders}) "
-                    f"ON CONFLICT(sample_time,row_key) DO UPDATE SET {updates}",
-                    ((sampled_at, key, *(values[field] for field in fields)) for key, values in rows),
                 )
-            except sqlite3.Error:
-                with self._schema_cache_lock:
-                    self._synced_result_schemas.pop(db_key, None)
-                raise
 
         duration_ms = round((time.perf_counter() - started) * 1000.0, 2)
         return {
             "samp_id": samp_id,
             "samp_name": definition["samp_name"],
             "sampled_at": sampled_at,
-            "rows_written": len(rows),
+            "rows_written": total_written,
             "duration_ms": duration_ms,
             "database": str(db_path),
-            "table": table,
+            "relative_path": self.to_relative_path(db_path),
+            "table": tables_written[0] if tables_written else default_table,
+            "tables": tables_written,
+            "item_results": item_results,
         }
 
-    def _resolve_query_fields(self, definition: dict[str, Any], fields: list[str] | None) -> list[str]:
+    def _resolve_query_fields(self, allowed_fields: list[str], fields: list[str] | None) -> list[str]:
         if fields is None:
-            return list(definition["fields"])
-        invalid = [field for field in fields if field not in definition["fields"] or not _IDENT.match(field)]
+            return list(allowed_fields)
+        invalid = [field for field in fields if field not in allowed_fields or not _IDENT.match(field)]
         if invalid:
             raise ValueError(f"查询字段不在采样定义中: {', '.join(invalid)}")
         selected = list(dict.fromkeys(fields))
@@ -989,6 +1539,7 @@ class Store:
         offset: int = 0,
         row_keys: list[str] | None = None,
         order: str = "asc",
+        item_id: str | None = None,
     ) -> dict[str, Any]:
         order_norm = order.lower()
         if order_norm not in ("asc", "desc"):
@@ -998,7 +1549,8 @@ class Store:
         requested_offset = offset
         raw = self._raw_definition(samp_id)
         definition = self._public(raw, self.default_source_db)
-        selected = self._resolve_query_fields(definition, fields)
+        selected_item = self._select_item(raw, item_id)
+        selected = self._resolve_query_fields(selected_item["fields"], fields)
         clean_keys = [str(k) for k in (row_keys or []) if str(k) != ""]
 
         rows: list[dict[str, Any]] = []
@@ -1006,10 +1558,7 @@ class Store:
         total_rows = 0
         dir_sql = "DESC" if order_norm == "desc" else "ASC"
 
-        for year in self._year_sequence(start, end, order_norm):
-            probe = calendar.timegm((year, 1, 1, 0, 0, 0))
-            table = self._result_name(raw["samp_name"], probe)
-            db_path = self.result_dir / f"{table}.db"
+        for db_path, table in self._iter_targets_for_range(raw, start, end, order_norm, selected_item["item_id"]):
             if not db_path.exists():
                 continue
             with self._connect_readonly(db_path) as conn:
@@ -1047,6 +1596,8 @@ class Store:
         rows.sort(key=lambda row: (row["sample_time"], row["row_key"]), reverse=(order_norm == "desc"))
         return {
             "definition": definition,
+            "item_id": selected_item["item_id"],
+            "item": selected_item,
             "columns": ["sample_time", "row_key", *selected],
             "rows": rows,
             "tables": tables,
@@ -1057,15 +1608,20 @@ class Store:
             "row_keys": clean_keys,
         }
 
-    def query_keys(self, samp_id: int, start: int, end: int, limit: int = 500) -> dict[str, Any]:
+    def query_keys(
+        self,
+        samp_id: int,
+        start: int,
+        end: int,
+        limit: int = 500,
+        item_id: str | None = None,
+    ) -> dict[str, Any]:
         """获取指定时间范围内出现过的去重 row_key 列表。"""
         safe_limit = max(1, min(int(limit), 5000))
         raw = self._raw_definition(samp_id)
+        selected_item = self._select_item(raw, item_id)
         found: set[str] = set()
-        for year in self._year_sequence(start, end, "asc"):
-            probe = calendar.timegm((year, 1, 1, 0, 0, 0))
-            table = self._result_name(raw["samp_name"], probe)
-            db_path = self.result_dir / f"{table}.db"
+        for db_path, table in self._iter_targets_for_range(raw, start, end, "asc", selected_item["item_id"]):
             if not db_path.exists():
                 continue
             with self._connect_readonly(db_path) as conn:
@@ -1081,7 +1637,7 @@ class Store:
             if len(found) >= safe_limit:
                 break
         keys = sorted(found)
-        return {"keys": keys, "total": len(keys)}
+        return {"item_id": selected_item["item_id"], "keys": keys, "total": len(keys)}
 
     def query_series(
         self,
@@ -1094,6 +1650,7 @@ class Store:
         agg: str = "avg",
         max_points: int = 600,
         max_raw_points: int = 20000,
+        item_id: str | None = None,
     ) -> dict[str, Any]:
         """面向时序曲线图的聚合/降采样查询，按 row_key 返回多系列数据与分组统计。
 
@@ -1109,17 +1666,16 @@ class Store:
 
         raw = self._raw_definition(samp_id)
         definition = self._public(raw, self.default_source_db)
-        selected = self._resolve_query_fields(definition, fields)
+        selected_item = self._select_item(raw, item_id)
+        selected = self._resolve_query_fields(selected_item["fields"], fields)
         clean_keys = [str(k) for k in (row_keys or []) if str(k) != ""]
 
         # 统计命中点数，自动决定是否需要分桶降采样
         tables: list[str] = []
         total_raw_rows = 0
         key_set: set[str] = set()
-        for year in self._year_sequence(start, end, "asc"):
-            probe = calendar.timegm((year, 1, 1, 0, 0, 0))
-            table = self._result_name(raw["samp_name"], probe)
-            db_path = self.result_dir / f"{table}.db"
+        target_list = self._iter_targets_for_range(raw, start, end, "asc", selected_item["item_id"])
+        for db_path, table in target_list:
             if not db_path.exists():
                 continue
             with self._connect_readonly(db_path) as conn:
@@ -1177,13 +1733,10 @@ class Store:
             except (TypeError, ValueError):
                 pass
 
-        for year in self._year_sequence(start, end, "asc"):
+        for db_path, table in target_list:
             if effective_bucket == 0 and raw_loaded >= max_raw:
                 truncated = True
                 break
-            probe = calendar.timegm((year, 1, 1, 0, 0, 0))
-            table = self._result_name(raw["samp_name"], probe)
-            db_path = self.result_dir / f"{table}.db"
             if not db_path.exists():
                 continue
             with self._connect_readonly(db_path) as conn:
@@ -1293,6 +1846,8 @@ class Store:
 
         return {
             "definition": definition,
+            "item_id": selected_item["item_id"],
+            "item": selected_item,
             "fields": selected,
             "tables": tables,
             "total_raw_rows": total_raw_rows,
@@ -1312,6 +1867,7 @@ class Store:
         fields: list[str] | None = None,
         row_keys: list[str] | None = None,
         order: str = "asc",
+        item_id: str | None = None,
     ) -> tuple[dict[str, Any], list[str], Iterator[dict[str, Any]]]:
         """流式遍历满足查询条件的全部行，供全量 CSV 导出使用。"""
         order_norm = order.lower()
@@ -1319,16 +1875,14 @@ class Store:
             raise ValueError("order 仅支持 asc 或 desc")
         raw = self._raw_definition(samp_id)
         definition = self._public(raw, self.default_source_db)
-        selected = self._resolve_query_fields(definition, fields)
+        selected_item = self._select_item(raw, item_id)
+        selected = self._resolve_query_fields(selected_item["fields"], fields)
         clean_keys = [str(k) for k in (row_keys or []) if str(k) != ""]
         columns = ["sample_time", "row_key", *selected]
         dir_sql = "DESC" if order_norm == "desc" else "ASC"
 
         def generator() -> Iterator[dict[str, Any]]:
-            for year in self._year_sequence(start, end, order_norm):
-                probe = calendar.timegm((year, 1, 1, 0, 0, 0))
-                table = self._result_name(raw["samp_name"], probe)
-                db_path = self.result_dir / f"{table}.db"
+            for db_path, table in self._iter_targets_for_range(raw, start, end, order_norm, selected_item["item_id"]):
                 if not db_path.exists():
                     continue
                 with self._connect_readonly(db_path) as conn:
@@ -1363,11 +1917,7 @@ class Store:
     def summary(self) -> dict[str, int]:
         with self._connect(self.definition_db) as conn:
             definitions, enabled = conn.execute("SELECT COUNT(*),COALESCE(SUM(enabled),0) FROM samp_define").fetchone()
-        result_databases = sum(
-            1
-            for path in self.result_dir.glob("samp_*.db")
-            if path.is_file() and _RESULT_FILE.fullmatch(path.name)
-        )
+        result_databases = len(self.list_result_databases())
         return {"definitions": definitions, "enabled": enabled, "result_databases": result_databases}
 
     def status(self) -> dict[str, Any]:
@@ -1378,33 +1928,60 @@ class Store:
         }
 
     def _inspect_result_db_meta(self, path: Path) -> dict[str, Any]:
-        """按文件 (mtime_ns, size) 缓存年度结果库统计元数据，避免轮询反复全表 COUNT(*)。"""
+        """按文件 (mtime_ns, size) 缓存结果库全部业务表的统计元数据，避免轮询反复全表 COUNT(*)。"""
         stat = path.stat()
         stamp = (stat.st_mtime_ns, stat.st_size)
         cache_key = os.path.normcase(str(path.resolve()))
         with self._meta_cache_lock:
             cached = self._result_meta_cache.get(cache_key)
             if cached is not None and cached[0] == stamp:
-                return dict(cached[1])
+                out = dict(cached[1])
+                out["tables"] = list(out.get("tables", []))
+                return out
 
-        table = path.stem
-        meta = {
+        meta: dict[str, Any] = {
             "size_bytes": stat.st_size,
             "modified_at": int(stat.st_mtime),
             "row_count": 0,
             "min_sample_time": None,
             "max_sample_time": None,
             "rtdb_registered": False,
+            "table_count": 0,
+            "tables": [],
         }
         try:
             with self._connect_readonly(path) as conn:
-                if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                biz_tables = [
+                    str(r[0])
+                    for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                    ).fetchall()
+                    if str(r[0]).lower() not in REGISTRY_TABLES and _IDENT.match(str(r[0]))
+                ]
+                total_rows = 0
+                min_ts: int | None = None
+                max_ts: int | None = None
+                valid_tables: list[str] = []
+                for table in biz_tables:
+                    cols = {str(r[1]).lower() for r in conn.execute(f"PRAGMA table_info({self._quote(table)})")}
+                    if "sample_time" not in cols:
+                        continue
+                    valid_tables.append(table)
                     cnt, mn, mx = conn.execute(
                         f"SELECT COUNT(*), MIN(sample_time), MAX(sample_time) FROM {self._quote(table)}"
                     ).fetchone()
-                    meta["row_count"] = int(cnt or 0)
-                    meta["min_sample_time"] = int(mn) if mn is not None else None
-                    meta["max_sample_time"] = int(mx) if mx is not None else None
+                    total_rows += int(cnt or 0)
+                    if mn is not None:
+                        val_mn = int(mn)
+                        min_ts = val_mn if min_ts is None else min(min_ts, val_mn)
+                    if mx is not None:
+                        val_mx = int(mx)
+                        max_ts = val_mx if max_ts is None else max(max_ts, val_mx)
+                meta["row_count"] = total_rows
+                meta["min_sample_time"] = min_ts
+                meta["max_sample_time"] = max_ts
+                meta["tables"] = valid_tables
+                meta["table_count"] = len(valid_tables)
                 meta["rtdb_registered"] = (
                     conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='rtdb_schema_tables'").fetchone()
                     is not None
@@ -1412,20 +1989,15 @@ class Store:
         except sqlite3.Error:
             pass
         with self._meta_cache_lock:
-            self._result_meta_cache[cache_key] = (stamp, dict(meta))
+            self._result_meta_cache[cache_key] = (stamp, {**meta, "tables": list(meta["tables"])})
         return meta
 
     def runtime_status(self, samp_id: int) -> dict[str, Any]:
         definition = self._raw_definition(samp_id)
-        prefix = f"samp_{definition['samp_name']}_"
-        files: list[tuple[int, Path]] = []
-        for path in sorted(self.result_dir.glob(f"{prefix}*.db")):
-            if not path.is_file():
-                continue
-            suffix = path.stem[len(prefix):]
-            if len(suffix) == 4 and suffix.isdigit():
-                files.append((int(suffix), path))
-        years = [year for year, _ in files]
+        items = self._items_from_row(definition)
+        spec = self._spec_from_row(definition)
+        files = self._list_spec_result_files(spec)
+        years = [year for year, _ in files if year is not None]
         total_size = 0
         last_mtime: int | None = None
         total_rows = 0
@@ -1445,8 +2017,11 @@ class Store:
             "name": definition["samp_name"],
             "enabled": bool(definition["enabled"]),
             "interval_seconds": definition["samp_time"],
-            "source_database": definition["source_database"] or self.default_source_db,
-            "source_table": definition["source_table"],
+            "source_database": self.to_relative_path(items[0]["source_database"] or self.default_source_db),
+            "source_table": items[0]["source_table"],
+            "item_count": len(items),
+            "target_preview": spec["preview_rel"],
+            "single_file": not spec["yearly"],
             "result_years": years,
             "result_size_bytes": total_size,
             "total_rows": total_rows,
@@ -1455,55 +2030,113 @@ class Store:
         }
 
     def list_result_databases(self) -> list[dict[str, Any]]:
-        """列出结果目录下所有年度结果库及其元数据、RTDB 登记状态与孤儿标记。"""
-        defined_names = {item["samp_name"] for item in self.list_definitions()}
+        """汇总默认目录与所有自定义目标目录下的结果库、元数据、RTDB 状态及孤儿标记。"""
+        defs = self.list_definitions()
+        defined_names = {item["samp_name"] for item in defs}
         items: list[dict[str, Any]] = []
-        for path in sorted(self.result_dir.glob("samp_*.db")):
-            if not path.is_file():
+        seen: set[str] = set()
+
+        # 1. 先纳入所有现存定义对应的目标结果库（支持自定义目录、模板及单库模式）
+        for item in defs:
+            try:
+                spec = self._parse_target_spec(item["samp_name"], item.get("target_dir", ""), item.get("target_name", ""))
+            except ValueError:
                 continue
-            match = _RESULT_FILE.fullmatch(path.name)
-            if not match:
+            for year, path in self._list_spec_result_files(spec):
+                norm = os.path.normcase(str(path.resolve()))
+                if norm in seen:
+                    continue
+                seen.add(norm)
+                meta = self._inspect_result_db_meta(path)
+                items.append(
+                    {
+                        "filename": path.name,
+                        "path": self.to_relative_path(path),
+                        "samp_name": item["samp_name"],
+                        "year": year,
+                        "size_bytes": meta["size_bytes"],
+                        "modified_at": meta["modified_at"],
+                        "row_count": meta["row_count"],
+                        "table_count": meta["table_count"],
+                        "tables": meta["tables"],
+                        "min_sample_time": meta["min_sample_time"],
+                        "max_sample_time": meta["max_sample_time"],
+                        "rtdb_registered": meta["rtdb_registered"],
+                        "is_orphan": False,
+                    }
+                )
+
+        # 2. 再扫描默认结果目录及各自定义目录中的默认命名孤儿库（samp_<name>_<YYYY>.db）
+        scan_dirs: list[Path] = [self.result_dir]
+        for item in defs:
+            td = item.get("target_dir") or ""
+            if td:
+                scan_dirs.append(self.resolve_path(td))
+        scanned_dir_keys: set[str] = set()
+        for directory in scan_dirs:
+            d_key = os.path.normcase(str(directory.resolve()))
+            if d_key in scanned_dir_keys or not directory.exists() or not directory.is_dir():
                 continue
-            samp_name, year_str = match.group(1), match.group(2)
-            meta = self._inspect_result_db_meta(path)
-            items.append(
-                {
-                    "filename": path.name,
-                    "path": str(path).replace("\\", "/"),
-                    "samp_name": samp_name,
-                    "year": int(year_str),
-                    "size_bytes": meta["size_bytes"],
-                    "modified_at": meta["modified_at"],
-                    "row_count": meta["row_count"],
-                    "min_sample_time": meta["min_sample_time"],
-                    "max_sample_time": meta["max_sample_time"],
-                    "rtdb_registered": meta["rtdb_registered"],
-                    "is_orphan": samp_name not in defined_names,
-                }
-            )
+            scanned_dir_keys.add(d_key)
+            for path in sorted(directory.glob("samp_*.db")):
+                if not path.is_file():
+                    continue
+                norm = os.path.normcase(str(path.resolve()))
+                if norm in seen:
+                    continue
+                match = _RESULT_FILE.fullmatch(path.name)
+                if not match:
+                    continue
+                seen.add(norm)
+                samp_name, year_str = match.group(1), match.group(2)
+                meta = self._inspect_result_db_meta(path)
+                items.append(
+                    {
+                        "filename": path.name,
+                        "path": self.to_relative_path(path),
+                        "samp_name": samp_name,
+                        "year": int(year_str),
+                        "size_bytes": meta["size_bytes"],
+                        "modified_at": meta["modified_at"],
+                        "row_count": meta["row_count"],
+                        "table_count": meta["table_count"],
+                        "tables": meta["tables"],
+                        "min_sample_time": meta["min_sample_time"],
+                        "max_sample_time": meta["max_sample_time"],
+                        "rtdb_registered": meta["rtdb_registered"],
+                        "is_orphan": samp_name not in defined_names,
+                    }
+                )
+        items.sort(key=lambda x: x["path"])
         return items
 
-    def delete_result_database(self, filename: str) -> bool:
-        """安全删除指定的年度结果库文件（仅允许删除匹配结果库命名规范的文件）。"""
-        if "/" in filename or "\\" in filename or not _RESULT_FILE.fullmatch(filename):
-            raise ValueError("非法的结果库文件名")
-        target = (self.result_dir / filename).resolve()
-        root = self.result_dir.resolve()
-        try:
-            target.relative_to(root)
-        except ValueError as exc:
-            raise ValueError("非法的结果库路径") from exc
-        if not target.exists() or not target.is_file():
+    def delete_result_database(self, target_ref: str) -> bool:
+        """安全删除结果库（支持传默认目录文件名或相对根目录路径，严格限制仅允许删已登记结果库）。"""
+        ref = str(target_ref or "").strip().replace("\\", "/")
+        if not ref or ".." in Path(ref).parts or Path(ref).is_absolute():
+            raise ValueError("非法的结果库路径")
+        known_by_rel = {item["path"]: self.resolve_path(item["path"]) for item in self.list_result_databases()}
+        known_by_name: dict[str, Path] = {}
+        for item in self.list_result_databases():
+            p = self.resolve_path(item["path"])
+            if p.parent.resolve() == self.result_dir.resolve():
+                known_by_name[item["filename"]] = p
+
+        target = known_by_rel.get(ref) or known_by_name.get(ref)
+        if target is None:
+            # 对未命中但明显不合法的非结果库文件名显式报错（兼容旧测试断言 ValueError）
+            if "/" not in ref and not _RESULT_FILE.fullmatch(ref):
+                raise ValueError("非法的结果库文件名")
             return False
-        db_key = os.path.normcase(str(target))
+
+        db_key = os.path.normcase(str(target.resolve()))
         with self._db_lock(target):
             target.unlink(missing_ok=True)
             for suffix in ("-wal", "-shm", "-journal"):
                 extra = Path(f"{target}{suffix}")
                 if extra.exists():
                     extra.unlink(missing_ok=True)
-        with self._schema_cache_lock:
-            self._synced_result_schemas.pop(db_key, None)
+        self._drop_schema_cache_for_db(db_key)
         with self._meta_cache_lock:
             self._result_meta_cache.pop(db_key, None)
         return True

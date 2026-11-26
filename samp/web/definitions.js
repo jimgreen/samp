@@ -7,14 +7,16 @@
   const CUSTOM_VAL = "__custom__";
 
   const state = {
-    config: { default_source_db: "", source_databases: [] },
+    config: { default_source_db: "", source_databases: [], target_dirs: [], sqlite_dir: "samp" },
     definitions: [],
     health: null,
     selectedIds: new Set(),
-    editingOriginalName: null,
+    editingOriginal: null, // { name, target_dir, target_name }
     nameTouched: false,
     drawerTables: [],
     sourceData: null,
+    draftItems: [],
+    activeItemIdx: 0,
     keyword: "",
     statusFilter: "all",
     // 批量建点向导状态
@@ -87,6 +89,15 @@
     $("m-defs").textContent = h.definitions ?? state.definitions.length;
     $("m-enabled").textContent = h.enabled ?? state.definitions.filter((d) => d.enabled).length;
     $("m-dbs").textContent = h.result_databases ?? 0;
+    const rootText = state.config.root_dir || t("empty.dash");
+    $("m-root").textContent = rootText;
+    $("m-root").title = rootText;
+    if ($("f-root-hint")) $("f-root-hint").textContent = state.config.root_dir ? `${state.config.root_dir}/` : "";
+    const dirList = $("target-dir-list");
+    if (dirList) {
+      const dirs = state.config.target_dirs || [];
+      dirList.innerHTML = dirs.map((d) => `<option value="${esc(d)}"></option>`).join("");
+    }
 
     const dot = $("m-sched-dot");
     const val = $("m-sched");
@@ -112,9 +123,16 @@
       if (status === "enabled" && !d.enabled) return false;
       if (status === "disabled" && d.enabled) return false;
       if (!kw) return true;
-      return [d.samp_name, d.source_table, d.source_database, d.filter].some((v) =>
-        String(v || "").toLowerCase().includes(kw)
-      );
+      const items = d.items || [];
+      const texts = [
+        d.samp_name,
+        d.source_table,
+        d.source_database,
+        d.target_preview,
+        d.filter,
+        ...items.flatMap((it) => [it.source_table, it.source_database, it.target_table, it.filter])
+      ];
+      return texts.some((v) => String(v || "").toLowerCase().includes(kw));
     });
   }
 
@@ -124,7 +142,7 @@
     const checkAll = $("check-all");
 
     if (!rows.length) {
-      tbody.innerHTML = `<tr><td colspan="9" class="empty-cell">${esc(t("empty.dash"))}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" class="empty-cell">${esc(t("empty.dash"))}</td></tr>`;
       checkAll.checked = false;
       return;
     }
@@ -137,14 +155,25 @@
         const badge = d.enabled
           ? `<span class="badge ok">${esc(t("state.enabled"))}</span>`
           : `<span class="badge muted">${esc(t("state.disabled"))}</span>`;
-        const fieldsStr = (d.fields || []).join(", ");
+        const items = d.items && d.items.length ? d.items : [{ source_table: d.source_table, fields: d.fields || [] }];
+        const itemBadge =
+          items.length > 1
+            ? ` <span class="badge ok" title="${esc(items.map((it) => `${it.source_table}→${it.target_table || t("def.item_default_table")}`).join("; "))}">${esc(t("def.item_count", { n: items.length }))}</span>`
+            : "";
+        const tablesStr = items.map((it) => it.source_table).join(", ");
+        const fieldsStr =
+          items.length > 1
+            ? items.map((it) => `${it.source_table}(${(it.fields || []).length})`).join(", ")
+            : (d.fields || []).join(", ");
+        const targetStr = d.target_preview || `samp/samp_${d.samp_name}_{year}.db`;
         const toggleTitle = d.enabled ? t("action.disable") : t("action.enable");
         return `
           <tr class="${checked ? "selected" : ""}" data-row-id="${d.id}">
             <td><input type="checkbox" class="row-check" data-id="${d.id}" ${checked ? "checked" : ""}></td>
-            <td><strong>${esc(d.samp_name)}</strong></td>
-            <td class="mono">${esc(d.source_table)}</td>
+            <td><strong>${esc(d.samp_name)}</strong>${itemBadge}</td>
+            <td class="mono cell-ellipsis-sm" title="${esc(tablesStr)}">${esc(tablesStr)}</td>
             <td class="mono cell-ellipsis" title="${esc(d.source_database)}">${esc(d.source_database)}</td>
+            <td class="mono cell-ellipsis" title="${esc(targetStr)}">${esc(targetStr)}</td>
             <td class="mono cell-ellipsis-sm" title="${esc(fieldsStr)}">${esc(fieldsStr)}</td>
             <td class="cell-input">
               <input type="number" min="0" step="1" class="num-in inline-period" data-id="${d.id}" value="${esc(d.interval_seconds)}" title="${esc(t("def.label_interval"))}">
@@ -186,6 +215,12 @@
       return;
     }
 
+    const nextItems = (def.items || []).map((it, idx) => ({
+      ...it,
+      fields: [...(it.fields || [])],
+      filter: idx === 0 ? nextFilter : it.filter || ""
+    }));
+
     try {
       const saved = await api(`/api/definitions/${id}`, {
         method: "PUT",
@@ -194,7 +229,10 @@
           name: def.samp_name,
           source_database: def.source_database,
           source_table: def.source_table,
+          target_dir: def.target_dir || "",
+          target_name: def.target_name || "",
           fields: def.fields,
+          items: nextItems.length ? nextItems : undefined,
           interval_seconds: nextInterval,
           filter: nextFilter,
           enabled: Boolean(def.enabled)
@@ -202,6 +240,7 @@
       });
       def.interval_seconds = saved.interval_seconds;
       def.filter = saved.filter;
+      def.items = saved.items;
       inputEl.classList.remove("is-invalid");
       toast(t("def.toast_updated"), "ok");
     } catch (err) {
@@ -274,10 +313,132 @@
     });
   }
 
+  function previewTargetPath(name, targetDir, targetName) {
+    const dirRaw = String(targetDir || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+    const dir = dirRaw || state.config.sqlite_dir || "samp";
+    const nm = String(targetName || "").trim();
+    const pt = String(name || "").trim() || "{name}";
+    let file;
+    if (!nm) {
+      file = `samp_${pt}_{year}.db`;
+    } else if (/\{year\}/i.test(nm)) {
+      const norm = nm.replace(/\{year\}/gi, "{year}");
+      file = norm.toLowerCase().endsWith(".db") ? norm : `${norm}.db`;
+    } else if (nm.toLowerCase().endsWith(".db")) {
+      file = nm;
+    } else {
+      file = `${nm}_{year}.db`;
+    }
+    return dir === "." ? file : `${dir}/${file}`;
+  }
+
+  function updateTargetPreview() {
+    const el = $("f-target-preview");
+    if (!el) return;
+    const text = previewTargetPath($("f-name").value, $("f-target-dir").value, $("f-target-name").value);
+    el.textContent = text;
+    el.title = text;
+  }
+
   function updateRenameWarning() {
     const editing = Boolean($("f-id").value);
-    const changed = editing && state.editingOriginalName && $("f-name").value.trim() !== state.editingOriginalName;
+    const orig = state.editingOriginal;
+    const changed =
+      editing &&
+      orig &&
+      ($("f-name").value.trim() !== orig.name ||
+        $("f-target-dir").value.trim() !== orig.target_dir ||
+        $("f-target-name").value.trim() !== orig.target_name);
     $("rename-warn").classList.toggle("show", Boolean(changed));
+  }
+
+  function syncActiveItemFromForm() {
+    const item = state.draftItems[state.activeItemIdx];
+    if (!item) return;
+    item.source_database = currentSourceDb() || item.source_database || state.config.default_source_db || "";
+    item.source_table = currentSourceTable() || "";
+    item.target_table = $("f-target-table").value.trim();
+    const checked = checkedFields($("f-fields"));
+    if (state.sourceData || checked.length) {
+      item.fields = checked;
+    }
+    item.filter = $("f-filter").value.trim();
+  }
+
+  function renderItemsStrip() {
+    const strip = $("items-strip");
+    const badge = $("items-count-badge");
+    if (!strip) return;
+    badge.textContent = `(${state.draftItems.length})`;
+    const canDel = state.draftItems.length > 1;
+    strip.innerHTML = state.draftItems
+      .map((it, idx) => {
+        const active = idx === state.activeItemIdx;
+        const src = it.source_table || t("def.select_table");
+        const tgt = it.target_table || (idx === 0 ? t("def.item_default_table") : src);
+        const fCount = (it.fields || []).length;
+        const label = `#${idx + 1} ${src} → ${tgt} (${fCount})`;
+        const delBtn = canDel
+          ? `<button type="button" class="item-tab-del" data-item-del="${idx}" title="${esc(t("def.item_remove"))}">&times;</button>`
+          : "";
+        return `<div class="item-tab ${active ? "active" : ""}" data-item-idx="${idx}" title="${esc(`${it.source_database} : ${src} → ${tgt}`)}"><span class="item-tab-label">${esc(label)}</span>${delBtn}</div>`;
+      })
+      .join("");
+  }
+
+  async function loadItemIntoForm(idx, autoSelectNumeric = false) {
+    state.activeItemIdx = Math.max(0, Math.min(idx, state.draftItems.length - 1));
+    const item = state.draftItems[state.activeItemIdx];
+    if (!item) return;
+    state.sourceData = null;
+    $("f-field-search").value = "";
+    $("fb-val").value = "";
+    $("f-filter").value = item.filter || "";
+    $("f-target-table").value = item.target_table || "";
+    renderSourceDbSelect($("f-source-db-select"), item.source_database || state.config.default_source_db, true);
+    renderItemsStrip();
+    const presetFields = autoSelectNumeric ? null : item.fields && item.fields.length ? item.fields : null;
+    await loadDrawerTables(item.source_table || null, presetFields, autoSelectNumeric || !item.fields?.length);
+    syncActiveItemFromForm();
+    renderItemsStrip();
+  }
+
+  async function switchDraftItem(idx) {
+    if (idx === state.activeItemIdx || idx < 0 || idx >= state.draftItems.length) return;
+    syncActiveItemFromForm();
+    await loadItemIntoForm(idx, false);
+  }
+
+  async function addDraftItem() {
+    syncActiveItemFromForm();
+    const baseDb = currentSourceDb() || state.config.default_source_db || "";
+    const usedTables = new Set(state.draftItems.map((it) => (it.source_table || "").toLowerCase()).filter(Boolean));
+    // 优先挑选同源库内尚未挂载的下一张业务表
+    const candidate = (state.drawerTables || []).find((tb) => !usedTables.has(tb.table.toLowerCase()));
+    const nextTable = candidate ? candidate.table : "";
+    let seq = state.draftItems.length + 1;
+    const usedIds = new Set(state.draftItems.map((it) => it.item_id));
+    while (usedIds.has(`i${seq}`)) seq += 1;
+    state.draftItems.push({
+      item_id: `i${seq}`,
+      source_database: baseDb,
+      source_table: nextTable,
+      target_table: nextTable,
+      fields: [],
+      filter: ""
+    });
+    await loadItemIntoForm(state.draftItems.length - 1, true);
+  }
+
+  async function removeDraftItem(idx) {
+    if (state.draftItems.length <= 1) {
+      toast(t("def.toast_item_min"), "error");
+      return;
+    }
+    syncActiveItemFromForm();
+    state.draftItems.splice(idx, 1);
+    const nextIdx = Math.min(idx, state.draftItems.length - 1);
+    await loadItemIntoForm(nextIdx, false);
   }
 
   function renderFilterBuilderOptions(data) {
@@ -414,11 +575,18 @@
       renderFilterBuilderOptions(data);
       renderPreview(data);
 
-      // 新建且用户未手动改名时，自动预填不冲突采样点名
-      if (!$("f-id").value && !state.nameTouched) {
+      // 新建且编辑首条采集项、用户未手动改名时，自动预填不冲突采样点名
+      if (!$("f-id").value && state.activeItemIdx === 0 && !state.nameTouched) {
         $("f-name").value = uniquePointName(table);
         validateNameInput();
+        updateTargetPreview();
       }
+      // 新增第 2 条及以上采集项时，目标表名留空则默认同步源表名
+      if (state.activeItemIdx > 0 && !$("f-target-table").value.trim()) {
+        $("f-target-table").value = table;
+      }
+      syncActiveItemFromForm();
+      renderItemsStrip();
     } catch (err) {
       $("preview-meta").textContent = err.message;
       $("preview-wrap").innerHTML = "";
@@ -428,7 +596,14 @@
 
   async function openDrawer(mode, def = null) {
     $("f-id").value = mode === "edit" && def ? String(def.id) : "";
-    state.editingOriginalName = mode === "edit" && def ? def.samp_name : null;
+    state.editingOriginal =
+      mode === "edit" && def
+        ? {
+            name: def.samp_name,
+            target_dir: def.target_dir || "",
+            target_name: def.target_name || ""
+          }
+        : null;
     state.nameTouched = mode !== "new";
     state.sourceData = null;
     $("f-field-search").value = "";
@@ -436,44 +611,79 @@
     $("f-name-hint").textContent = "";
     $("f-name").classList.remove("is-invalid");
 
+    const buildDraftItems = (srcDef) => {
+      if (srcDef?.items?.length) {
+        return srcDef.items.map((it, idx) => ({
+          item_id: it.item_id || `i${idx + 1}`,
+          source_database: it.source_database || srcDef.source_database || state.config.default_source_db,
+          source_table: it.source_table || "",
+          target_table: it.target_table || "",
+          fields: [...(it.fields || [])],
+          filter: it.filter || ""
+        }));
+      }
+      if (srcDef) {
+        return [
+          {
+            item_id: "i1",
+            source_database: srcDef.source_database || state.config.default_source_db,
+            source_table: srcDef.source_table || "",
+            target_table: "",
+            fields: [...(srcDef.fields || [])],
+            filter: srcDef.filter || ""
+          }
+        ];
+      }
+      return [
+        {
+          item_id: "i1",
+          source_database: state.config.default_source_db || (state.config.source_databases || [])[0] || "",
+          source_table: "",
+          target_table: "",
+          fields: [],
+          filter: ""
+        }
+      ];
+    };
+
     if (mode === "edit" && def) {
       $("drawer-title").textContent = t("def.drawer_edit", { name: def.samp_name });
       $("f-name").value = def.samp_name;
       $("f-interval").value = def.interval_seconds;
-      $("f-filter").value = def.filter || "";
+      $("f-target-dir").value = def.target_dir || "";
+      $("f-target-name").value = def.target_name || "";
       $("f-enabled").checked = Boolean(def.enabled);
-      renderSourceDbSelect($("f-source-db-select"), def.source_database, true);
+      state.draftItems = buildDraftItems(def);
     } else if (mode === "copy" && def) {
       $("drawer-title").textContent = t("def.drawer_copy");
       $("f-name").value = uniquePointName(def.samp_name);
       $("f-interval").value = def.interval_seconds;
-      $("f-filter").value = def.filter || "";
+      $("f-target-dir").value = def.target_dir || "";
+      $("f-target-name").value = "";
       $("f-enabled").checked = false;
-      renderSourceDbSelect($("f-source-db-select"), def.source_database, true);
+      state.draftItems = buildDraftItems(def);
     } else {
       $("drawer-title").textContent = t("def.drawer_new");
       $("f-name").value = "";
       $("f-interval").value = "60";
-      $("f-filter").value = "";
+      $("f-target-dir").value = "";
+      $("f-target-name").value = "";
       $("f-enabled").checked = true;
-      renderSourceDbSelect($("f-source-db-select"), state.config.default_source_db, true);
+      state.draftItems = buildDraftItems(null);
     }
 
     $("preview-meta").textContent = t("empty.dash");
     $("preview-wrap").innerHTML = "";
     $("f-rename-migrate").checked = true;
     highlightPeriodChip();
+    updateTargetPreview();
     updateRenameWarning();
     $("drawer-backdrop").classList.add("open");
 
-    if (def) {
-      await loadDrawerTables(def.source_table, def.fields || [], false);
-      if (mode === "copy") {
-        $("f-name").focus();
-        $("f-name").select();
-      }
-    } else {
-      await loadDrawerTables(null, null, true);
+    await loadItemIntoForm(0, mode === "new");
+    if (mode === "copy") {
+      $("f-name").focus();
+      $("f-name").select();
     }
   }
 
@@ -486,28 +696,46 @@
       $("f-name").focus();
       return;
     }
-    const db = currentSourceDb();
-    const table = currentSourceTable();
-    if (!db || !table) {
+    syncActiveItemFromForm();
+    if (!state.draftItems.length) {
       toast(t("def.toast_need_source"), "error");
       return;
     }
-    const fields = checkedFields($("f-fields"));
-    if (!fields.length) {
-      toast(t("def.toast_need_fields"), "error");
-      return;
+    for (let i = 0; i < state.draftItems.length; i += 1) {
+      const it = state.draftItems[i];
+      if (!it.source_database || !it.source_table) {
+        await loadItemIntoForm(i, false);
+        toast(t("def.toast_need_source"), "error");
+        return;
+      }
+      if (!it.fields || !it.fields.length) {
+        await loadItemIntoForm(i, false);
+        toast(t("def.toast_need_fields"), "error");
+        return;
+      }
     }
     const id = $("f-id").value;
-    const renamed = Boolean(id && state.editingOriginalName && $("f-name").value.trim() !== state.editingOriginalName);
+    const orig = state.editingOriginal;
+    const targetChanged = Boolean(
+      id &&
+        orig &&
+        ($("f-name").value.trim() !== orig.name ||
+          $("f-target-dir").value.trim() !== orig.target_dir ||
+          $("f-target-name").value.trim() !== orig.target_name)
+    );
+    const primary = state.draftItems[0];
     const payload = {
       name: $("f-name").value.trim(),
-      source_database: db,
-      source_table: table,
-      fields,
+      source_database: primary.source_database,
+      source_table: primary.source_table,
+      target_dir: $("f-target-dir").value.trim(),
+      target_name: $("f-target-name").value.trim(),
+      fields: primary.fields,
+      items: state.draftItems,
       interval_seconds: Number($("f-interval").value),
-      filter: $("f-filter").value.trim(),
+      filter: primary.filter || "",
       enabled: $("f-enabled").checked,
-      rename_results: renamed ? $("f-rename-migrate").checked : false
+      rename_results: targetChanged ? $("f-rename-migrate").checked : false
     };
     try {
       const saved = await api(id ? `/api/definitions/${id}` : "/api/definitions", {
@@ -623,6 +851,7 @@
 
   async function openBatchWizard() {
     renderSourceDbSelect($("bw-db"), state.config.default_source_db, false);
+    $("bw-target-dir").value = "";
     $("bw-prefix").value = "";
     $("bw-period").value = "60";
     $("bw-field-mode").value = "numeric";
@@ -634,6 +863,7 @@
 
   async function submitBatchWizard() {
     const db = $("bw-db").value;
+    const targetDir = $("bw-target-dir").value.trim();
     const enabled = $("bw-enabled").checked;
     const items = [];
     for (const tb of state.bwTables) {
@@ -644,6 +874,7 @@
         name: bwPointNameFor(tb.table).trim(),
         source_database: db,
         source_table: tb.table,
+        target_dir: targetDir,
         fields,
         interval_seconds: Math.max(0, Number(bwPeriodFor(tb.table)) || 0),
         filter: "",
@@ -808,6 +1039,15 @@
     $("btn-batch-wizard").addEventListener("click", openBatchWizard);
     $("batch-close").addEventListener("click", () => $("batch-backdrop").classList.remove("open"));
     $("batch-cancel").addEventListener("click", () => $("batch-backdrop").classList.remove("open"));
+    $("batch-backdrop").addEventListener("click", (e) => {
+      if (e.target === $("batch-backdrop")) $("batch-backdrop").classList.remove("open");
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if ($("drawer-backdrop").classList.contains("open")) closeDrawer();
+      if ($("batch-backdrop").classList.contains("open")) $("batch-backdrop").classList.remove("open");
+      if ($("import-backdrop").classList.contains("open")) $("import-backdrop").classList.remove("open");
+    });
     $("batch-submit").addEventListener("click", submitBatchWizard);
     $("bw-db").addEventListener("change", loadBatchWizardTables);
     $("bw-field-mode").addEventListener("change", renderBatchWizardTable);
@@ -864,7 +1104,20 @@
       if (e.target === $("drawer-backdrop")) closeDrawer();
     });
 
-    // 单点抽屉自动级联
+    // 单点弹窗：多采集项切换/新增/删除
+    $("btn-add-item").addEventListener("click", addDraftItem);
+    $("items-strip").addEventListener("click", (e) => {
+      const delBtn = e.target.closest("[data-item-del]");
+      if (delBtn) {
+        e.stopPropagation();
+        removeDraftItem(Number(delBtn.dataset.itemDel));
+        return;
+      }
+      const tab = e.target.closest("[data-item-idx]");
+      if (tab) switchDraftItem(Number(tab.dataset.itemIdx));
+    });
+
+    // 单点弹窗：源库/源表自动级联
     $("f-source-db-select").addEventListener("change", (e) => {
       const isCustom = e.target.value === CUSTOM_VAL;
       $("f-source-db-custom").classList.toggle("hidden", !isCustom);
@@ -875,20 +1128,47 @@
     $("f-source-table-select").addEventListener("change", (e) => {
       const isCustom = e.target.value === CUSTOM_VAL;
       $("f-source-table-custom").classList.toggle("hidden", !isCustom);
-      if (!isCustom && e.target.value) inspectSource(null, !$("f-id").value);
-      else if (isCustom) $("f-source-table-custom").focus();
+      if (!isCustom && e.target.value) {
+        if (state.activeItemIdx > 0) {
+          $("f-target-table").value = e.target.value;
+        }
+        inspectSource(null, true);
+      } else if (isCustom) {
+        $("f-source-table-custom").focus();
+      }
     });
-    $("btn-load-tables").addEventListener("click", () => loadDrawerTables(null, null, !$("f-id").value));
+    $("f-target-table").addEventListener("input", () => {
+      syncActiveItemFromForm();
+      renderItemsStrip();
+    });
+    $("f-filter").addEventListener("input", () => {
+      syncActiveItemFromForm();
+    });
+    $("f-fields").addEventListener("change", () => {
+      syncActiveItemFromForm();
+      renderItemsStrip();
+    });
+    $("btn-load-tables").addEventListener("click", () => loadDrawerTables(null, null, true));
     $("btn-inspect").addEventListener("click", () => inspectSource(null, false));
     $("btn-test-filter").addEventListener("click", () => inspectSource(null, false));
 
     // 字段快捷选择与搜索
     $("f-field-search").addEventListener("input", () => renderDrawerFields(checkedFields($("f-fields"))));
-    $("btn-fields-all").addEventListener("click", () => setAllFields($("f-fields"), true));
-    $("btn-fields-none").addEventListener("click", () => setAllFields($("f-fields"), false));
+    $("btn-fields-all").addEventListener("click", () => {
+      setAllFields($("f-fields"), true);
+      syncActiveItemFromForm();
+      renderItemsStrip();
+    });
+    $("btn-fields-none").addEventListener("click", () => {
+      setAllFields($("f-fields"), false);
+      syncActiveItemFromForm();
+      renderItemsStrip();
+    });
     $("btn-fields-num").addEventListener("click", () => {
       if (!state.sourceData) return;
       renderDrawerFields(state.sourceData.numeric_fields || []);
+      syncActiveItemFromForm();
+      renderItemsStrip();
     });
 
     // 可视化过滤构造器与预览表点选
@@ -919,8 +1199,17 @@
     $("f-interval").addEventListener("input", highlightPeriodChip);
     $("f-name").addEventListener("input", () => {
       state.nameTouched = true;
+      updateTargetPreview();
       updateRenameWarning();
       validateNameInput();
+    });
+    $("f-target-dir").addEventListener("input", () => {
+      updateTargetPreview();
+      updateRenameWarning();
+    });
+    $("f-target-name").addEventListener("input", () => {
+      updateTargetPreview();
+      updateRenameWarning();
     });
     $("period-chips").addEventListener("click", (e) => {
       const btn = e.target.closest("[data-period]");
@@ -978,6 +1267,7 @@
       renderMetrics();
       renderTable();
       renderBatchWizardTable();
+      if ($("drawer-backdrop").classList.contains("open")) renderItemsStrip();
     });
   }
 

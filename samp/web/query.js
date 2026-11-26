@@ -55,7 +55,41 @@
     });
   }
 
-  function renderDefinitionSelect(targetId = null) {
+  function currentDefinition() {
+    return state.definitions.find((d) => String(d.id) === String($("q-def").value)) || null;
+  }
+
+  function currentItem(def = currentDefinition()) {
+    if (!def) return null;
+    const items = def.items && def.items.length ? def.items : [{ item_id: "i1", source_table: def.source_table, target_table: "", fields: def.fields || [] }];
+    const val = $("q-item").value;
+    return items.find((it) => it.item_id === val) || items[0];
+  }
+
+  function renderItemSelect(def, targetItemId = null) {
+    const itemSel = $("q-item");
+    if (!def) {
+      itemSel.classList.add("hidden");
+      itemSel.innerHTML = "";
+      $("q-fields").innerHTML = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
+      return;
+    }
+    const items = def.items && def.items.length ? def.items : [{ item_id: "i1", source_table: def.source_table, target_table: "", fields: def.fields || [] }];
+    const prev = targetItemId ?? itemSel.value;
+    itemSel.innerHTML = items
+      .map((it) => {
+        const tbl = it.target_table || t("def.item_default_table");
+        const label = it.target_table && it.target_table === it.source_table ? tbl : `${tbl} · ${it.source_table}`;
+        return `<option value="${esc(it.item_id)}">${esc(label)}</option>`;
+      })
+      .join("");
+    const chosenItem = items.find((it) => it.item_id === prev) || items[0];
+    itemSel.value = chosenItem.item_id;
+    itemSel.classList.toggle("hidden", items.length <= 1);
+    renderFieldChecks($("q-fields"), chosenItem.fields || [], chosenItem.fields || []);
+  }
+
+  function renderDefinitionSelect(targetId = null, targetItemId = null) {
     const select = $("q-def");
     const prev = targetId ?? select.value;
     select.innerHTML = state.definitions
@@ -65,9 +99,9 @@
       state.definitions.find((d) => String(d.id) === String(prev)) || state.definitions[0];
     if (chosen) {
       select.value = String(chosen.id);
-      renderFieldChecks($("q-fields"), chosen.fields || [], chosen.fields || []);
+      renderItemSelect(chosen, targetItemId);
     } else {
-      $("q-fields").innerHTML = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
+      renderItemSelect(null);
     }
   }
 
@@ -117,8 +151,10 @@
       toast(t("q.toast_need_fields"), "error");
       return null;
     }
+    const item = currentItem();
     return {
       id,
+      itemId: item ? item.item_id : "",
       start,
       end,
       fields,
@@ -239,6 +275,7 @@
       limit: String(state.limit),
       offset: String(state.page * state.limit)
     });
+    if (req.itemId) params.set("item_id", req.itemId);
     if (req.rowKeys.length) params.set("row_keys", req.rowKeys.join(","));
 
     try {
@@ -250,9 +287,12 @@
           fields: req.fields.join(","),
           agg: req.agg
         });
+        if (req.itemId) sParams.set("item_id", req.itemId);
         if (req.rowKeys.length) sParams.set("row_keys", req.rowKeys.join(","));
+        const kParams = new URLSearchParams({ start: String(req.start), end: String(req.end) });
+        if (req.itemId) kParams.set("item_id", req.itemId);
         jobs.push(api(`/api/query/${req.id}/series?${sParams.toString()}`));
-        jobs.push(api(`/api/query/${req.id}/keys?start=${req.start}&end=${req.end}`));
+        jobs.push(api(`/api/query/${req.id}/keys?${kParams.toString()}`));
       }
       const [tableRes, seriesRes, keysRes] = await Promise.all(jobs);
       state.lastTable = tableRes;
@@ -287,6 +327,7 @@
       fields: req.fields.join(","),
       order: req.order
     });
+    if (req.itemId) params.set("item_id", req.itemId);
     if (req.rowKeys.length) params.set("row_keys", req.rowKeys.join(","));
     window.location.href = `/api/query/${req.id}/export?${params.toString()}`;
   }
@@ -383,8 +424,16 @@
     $("q-end").addEventListener("change", () => { state.activeRange = null; });
 
     $("q-def").addEventListener("change", () => {
-      const def = state.definitions.find((d) => String(d.id) === $("q-def").value);
-      if (def) renderFieldChecks($("q-fields"), def.fields || [], def.fields || []);
+      renderItemSelect(currentDefinition(), null);
+      state.selectedKeys.clear();
+      state.availableKeys = [];
+      renderKeyMenu();
+      state.page = 0;
+      runQuery(0, false, true);
+    });
+    $("q-item").addEventListener("change", () => {
+      const item = currentItem();
+      if (item) renderFieldChecks($("q-fields"), item.fields || [], item.fields || []);
       state.selectedKeys.clear();
       state.availableKeys = [];
       renderKeyMenu();
@@ -412,6 +461,13 @@
 
     onThemeChange(() => state.chart?.refreshTheme());
     onLangChange(() => {
+      const curDef = currentDefinition();
+      if (curDef) {
+        const checked = checkedFields($("q-fields"));
+        renderItemSelect(curDef, $("q-item").value);
+        const item = currentItem(curDef);
+        if (item && checked.length) renderFieldChecks($("q-fields"), item.fields || [], checked);
+      }
       if (state.lastTable) renderTable(state.lastTable);
       if (state.lastSeries) {
         renderStatsBar(state.lastSeries);

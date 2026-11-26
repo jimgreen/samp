@@ -11,7 +11,7 @@ import logging
 import time
 
 from .scheduler import SamplingScheduler
-from .store import SQLITE_DIR, Store
+from .store import DEFAULT_DEFINITION_DB, DEFAULT_RESULT_DIR, DEFAULT_SOURCE_DB, ROOT_DIR, Store
 
 LOGGER = logging.getLogger("samp.sampler")
 
@@ -23,8 +23,9 @@ def run(
     once: bool = False,
     workers: int = 4,
     align: bool = True,
+    root_dir: str | None = None,
 ) -> None:
-    store = Store(db, source_db, result_dir)
+    store = Store(db, source_db, result_dir, root_dir=root_dir)
     scheduler = SamplingScheduler(store, workers=workers, align=align, mode="standalone")
     if once:
         scheduler.tick(force_once=True)
@@ -41,11 +42,12 @@ def run(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SAMP 独立自动采样进程")
-    parser.add_argument("--db", default=str(SQLITE_DIR / "samp_define.db"), help="采样定义 SQLite 数据库路径")
-    parser.add_argument("--source-db", default=str(SQLITE_DIR / "source.db"), help="默认源 SQLite 数据库路径")
-    parser.add_argument("--result-dir", default=str(SQLITE_DIR), help="年度结果库存储目录")
+    parser.add_argument("--root-dir", default=str(ROOT_DIR), help="工作根目录（相对路径解析基准）")
+    parser.add_argument("--db", default=str(DEFAULT_DEFINITION_DB), help="采样定义库路径（默认相对根目录）")
+    parser.add_argument("--source-db", default=str(DEFAULT_SOURCE_DB), help="默认源库路径（默认相对根目录）")
+    parser.add_argument("--result-dir", default=str(DEFAULT_RESULT_DIR), help="年度结果库存储目录（默认相对根目录）")
     parser.add_argument("--once", action="store_true", help="仅执行一次并退出")
     parser.add_argument("--workers", type=int, default=4, help="并行采样线程数")
     parser.add_argument("--no-align", action="store_true", help="禁用整周期时间对齐")
     args = parser.parse_args()
-    run(args.db, args.source_db, args.result_dir, args.once, args.workers, align=not args.no_align)
+    run(args.db, args.source_db, args.result_dir, args.once, args.workers, align=not args.no_align, root_dir=args.root_dir)
