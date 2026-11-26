@@ -184,9 +184,12 @@
         </div>
 
         <div class="form-row">
-          <label for="f-target-dir-select" data-i18n="def.label_target_dir">目标目录</label>
+          <label for="f-target-dir-trigger" data-i18n="def.label_target_dir">目标目录</label>
           <div class="input-inline">
-            <select id="f-target-dir-select" class="select-ctrl mono"></select>
+            <button type="button" id="f-target-dir-trigger" class="tree-trigger mono" aria-haspopup="tree" aria-expanded="false">
+              <span class="tree-trigger-text">samp/</span>
+              <svg class="ico ico-xs tree-caret" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
             <input id="f-target-dir-custom" class="ctrl mono hidden" data-i18n-placeholder="def.ph_target_dir" placeholder="留空默认 samp">
           </div>
         </div>
@@ -215,11 +218,14 @@
       <div class="form-grid">
         <div class="form-row span-2">
           <div class="input-inline" style="justify-content:space-between">
-            <label for="f-source-dir-select" data-i18n="def.label_source_db">源数据库</label>
+            <label for="f-source-dir-trigger" data-i18n="def.label_source_db">源数据库</label>
             <span id="f-root-hint" class="mono text-muted" style="font-size:11px"></span>
           </div>
           <div class="input-inline">
-            <select id="f-source-dir-select" class="select-ctrl mono" style="flex:1.35 1 240px"></select>
+            <button type="button" id="f-source-dir-trigger" class="tree-trigger mono" style="flex:1.35 1 240px" aria-haspopup="tree" aria-expanded="false">
+              <span class="tree-trigger-text">—</span>
+              <svg class="ico ico-xs tree-caret" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
             <select id="f-source-db-select" class="select-ctrl mono" style="flex:1 1 180px"></select>
             <input id="f-source-db-custom" class="ctrl mono hidden" placeholder="realtime/source.db">
             <button type="button" id="btn-load-tables" class="btn" data-i18n="action.load_tables">读表</button>
@@ -304,7 +310,10 @@
 
     <div class="batch-bar">
       <select id="bw-db" class="select-ctrl mono" style="flex:1 1 180px"></select>
-      <select id="bw-target-dir" class="select-ctrl mono" style="max-width:170px" data-i18n-title="def.label_target_dir"></select>
+      <button type="button" id="bw-target-dir-trigger" class="tree-trigger mono" style="flex:0 1 170px" data-i18n-title="def.label_target_dir" aria-haspopup="tree" aria-expanded="false">
+        <span class="tree-trigger-text">samp/</span>
+        <svg class="ico ico-xs tree-caret" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
       <select id="bw-field-mode" class="select-ctrl">
         <option value="numeric" data-i18n="def.batch_fields_num">仅数值列</option>
         <option value="all" data-i18n="def.batch_fields_all">全部字段</option>

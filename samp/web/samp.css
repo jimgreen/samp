@@ -1412,6 +1412,207 @@ body.resizing-sidebar {
   color: var(--danger);
 }
 
+/* 可折叠多级目录树下拉选择器（挂 body fixed 定位，避免被弹窗 overflow 裁剪） */
+.tree-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-btn);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 0;
+  flex: 1 1 auto;
+  text-align: left;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+}
+
+.tree-trigger:hover {
+  border-color: var(--accent);
+}
+
+.tree-trigger.open,
+.tree-trigger:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  outline: none;
+}
+
+.tree-trigger-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-caret {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform 140ms ease;
+}
+
+.tree-trigger.open .tree-caret {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+
+.tree-popover {
+  position: fixed;
+  z-index: 75;
+  display: none;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
+  min-width: 240px;
+}
+
+.tree-popover.open {
+  display: flex;
+}
+
+.tree-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border-bottom: var(--border);
+  background: var(--bg-subtle);
+  flex-shrink: 0;
+}
+
+.tree-head .ctrl {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 23px;
+  font-size: 11px;
+}
+
+.tree-list {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 4px;
+  max-height: 250px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding-right: 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.tree-row:hover {
+  background: var(--bg-hover);
+}
+
+.tree-row.selected {
+  background: var(--bg-selected);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tree-row.special {
+  color: var(--text-secondary);
+}
+
+.tree-row.special.selected {
+  color: var(--accent);
+}
+
+.tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.tree-toggle:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tree-toggle.leaf {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.tree-folder-ico {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+}
+
+.tree-row.selected .tree-folder-ico {
+  color: var(--accent);
+}
+
+.tree-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 0 5px;
+  height: 16px;
+  line-height: 16px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  border: var(--border);
+}
+
+.tree-badge.has-db {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: transparent;
+}
+
+.tree-foot {
+  padding: 4px;
+  border-top: var(--border);
+  background: var(--bg-subtle);
+  flex-shrink: 0;
+}
+
 /* 模态确认弹窗（高危不可逆操作专用，左侧 4px 语义色条，禁止点击遮罩误关） */
 .modal-backdrop {
   position: fixed;

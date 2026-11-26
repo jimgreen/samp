@@ -59,9 +59,9 @@
   }
 
   function currentTargetDir() {
-    const sel = $("f-target-dir-select").value;
-    if (sel === CUSTOM_VAL) return $("f-target-dir-custom").value.trim();
-    return sel;
+    const val = targetDirTree ? targetDirTree.getValue() : "";
+    if (val === CUSTOM_VAL) return $("f-target-dir-custom").value.trim();
+    return val;
   }
 
   function currentSourceDb() {
@@ -268,6 +268,339 @@
     }
   }
 
+  /* ===================== 可折叠多级目录树下拉选择器 ===================== */
+  const FOLDER_SVG =
+    '<svg class="tree-folder-ico" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+  const openDirTrees = new Set();
+  let targetDirTree = null;
+  let sourceDirTree = null;
+  let bwTargetDirTree = null;
+
+  function closeAllDirTrees(except = null) {
+    [...openDirTrees].forEach((picker) => {
+      if (picker !== except) picker.close();
+    });
+  }
+
+  function buildDirTreeNodes(dirList, directCounts = new Map()) {
+    const rootChildren = new Map();
+    const ensureNode = (map, name, fullPath) => {
+      let node = map.get(name);
+      if (!node) {
+        node = { name, path: fullPath, childrenMap: new Map(), children: [], directCount: 0, totalCount: 0 };
+        map.set(name, node);
+      }
+      return node;
+    };
+    dirList.forEach((raw) => {
+      const clean = String(raw || "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+      if (!clean || clean === ".") return;
+      const parts = clean.split("/").filter(Boolean);
+      let map = rootChildren;
+      let acc = "";
+      parts.forEach((seg) => {
+        acc = acc ? `${acc}/${seg}` : seg;
+        const node = ensureNode(map, seg, acc);
+        map = node.childrenMap;
+      });
+    });
+
+    const finalize = (map) => {
+      const arr = [...map.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+      arr.forEach((node) => {
+        node.children = finalize(node.childrenMap);
+        node.directCount = directCounts.get(node.path) || 0;
+        node.totalCount = node.directCount + node.children.reduce((s, c) => s + c.totalCount, 0);
+      });
+      return arr;
+    };
+    return finalize(rootChildren);
+  }
+
+  function ancestorPaths(relPath) {
+    const clean = String(relPath || "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+    if (!clean || clean === "." || clean === ALL_DIRS_VAL || clean === CUSTOM_VAL) return [];
+    const parts = clean.split("/").filter(Boolean);
+    const out = [];
+    let acc = "";
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      acc = acc ? `${acc}/${parts[i]}` : parts[i];
+      out.push(acc);
+    }
+    return out;
+  }
+
+  function createDirTreePicker(triggerEl, options = {}) {
+    const opts = {
+      includeAll: Boolean(options.includeAll),
+      allowCustom: Boolean(options.allowCustom),
+      showCounts: Boolean(options.showCounts),
+      defaultDirMode: Boolean(options.defaultDirMode), // true 时 "" 代表默认结果目录
+      onChange: options.onChange || (() => {})
+    };
+
+    const popover = document.createElement("div");
+    popover.className = "tree-popover";
+    popover.innerHTML = `
+      <div class="tree-head">
+        <input type="text" class="ctrl mono tree-search" autocomplete="off">
+        <button type="button" class="btn xs tree-expand-all"></button>
+        <button type="button" class="btn xs tree-collapse-all"></button>
+      </div>
+      <div class="tree-list" role="tree"></div>
+      <div class="tree-foot hidden"></div>
+    `;
+    document.body.appendChild(popover);
+
+    const searchInput = popover.querySelector(".tree-search");
+    const expandBtn = popover.querySelector(".tree-expand-all");
+    const collapseBtn = popover.querySelector(".tree-collapse-all");
+    const listEl = popover.querySelector(".tree-list");
+    const footEl = popover.querySelector(".tree-foot");
+
+    let value = opts.includeAll ? ALL_DIRS_VAL : "";
+    let treeNodes = [];
+    let allDirs = [];
+    let directCounts = new Map();
+    let totalDbCount = 0;
+    let defaultDir = "samp";
+    let keyword = "";
+    const expanded = new Set();
+
+    function syncTriggerText() {
+      const textEl = triggerEl.querySelector(".tree-trigger-text");
+      let display = "";
+      if (value === ALL_DIRS_VAL) {
+        display = `${t("def.all_dirs")} (${totalDbCount})`;
+      } else if (value === CUSTOM_VAL) {
+        display = t("def.custom_dir");
+      } else if (opts.defaultDirMode && !value) {
+        display = `${defaultDir}/`;
+      } else if (value === ".") {
+        display = t("def.root_dir_opt");
+      } else {
+        display = `${value}/`;
+      }
+      textEl.textContent = display;
+      triggerEl.title = display;
+    }
+
+    function positionPopover() {
+      const rect = triggerEl.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const width = Math.min(Math.max(rect.width, 280), vw - 16);
+      let left = rect.left;
+      if (left + width > vw - 8) left = Math.max(8, vw - width - 8);
+
+      const spaceBelow = vh - rect.bottom - 10;
+      const spaceAbove = rect.top - 10;
+      const openUp = spaceBelow < 220 && spaceAbove > spaceBelow;
+      const maxH = Math.max(160, Math.min(320, openUp ? spaceAbove : spaceBelow));
+      listEl.style.maxHeight = `${Math.max(110, maxH - 76)}px`;
+
+      popover.style.width = `${width}px`;
+      popover.style.left = `${left}px`;
+      if (openUp) {
+        popover.style.top = "auto";
+        popover.style.bottom = `${vh - rect.top + 4}px`;
+      } else {
+        popover.style.bottom = "auto";
+        popover.style.top = `${rect.bottom + 4}px`;
+      }
+    }
+
+    function renderTreeList() {
+      searchInput.placeholder = t("def.ph_search_dir");
+      expandBtn.textContent = t("def.tree_expand");
+      collapseBtn.textContent = t("def.tree_collapse");
+
+      const kw = keyword.trim().toLowerCase();
+      const rows = [];
+
+      const activeEffective = opts.defaultDirMode && !value ? defaultDir : value;
+
+      if (!kw && opts.includeAll) {
+        const sel = value === ALL_DIRS_VAL;
+        rows.push(
+          `<div class="tree-row special ${sel ? "selected" : ""}" data-val="${esc(ALL_DIRS_VAL)}" style="padding-left:6px">` +
+            `<span class="tree-toggle leaf"></span>` +
+            `<span class="tree-name">${esc(t("def.all_dirs"))}</span>` +
+            (opts.showCounts ? `<span class="tree-badge ${totalDbCount ? "has-db" : ""}">${totalDbCount}</span>` : "") +
+            `</div>`
+        );
+      }
+
+      const rootLabel = t("def.root_dir_opt");
+      if (!kw || ".".includes(kw) || rootLabel.toLowerCase().includes(kw)) {
+        const rootCount = directCounts.get(".") || 0;
+        const sel = value === ".";
+        rows.push(
+          `<div class="tree-row special ${sel ? "selected" : ""}" data-val="." title="./" style="padding-left:6px">` +
+            `<span class="tree-toggle leaf"></span>` +
+            `${FOLDER_SVG}` +
+            `<span class="tree-name">${esc(rootLabel)}</span>` +
+            (opts.showCounts && rootCount ? `<span class="tree-badge has-db">${rootCount}</span>` : "") +
+            `</div>`
+        );
+      }
+
+      const nodeMatches = (node) => {
+        if (!kw) return true;
+        if (node.path.toLowerCase().includes(kw) || node.name.toLowerCase().includes(kw)) return true;
+        return node.children.some(nodeMatches);
+      };
+
+      const renderNode = (node, depth) => {
+        if (!nodeMatches(node)) return;
+        const hasChildren = node.children.length > 0;
+        const isExpanded = Boolean(kw) || expanded.has(node.path);
+        const isSelected = activeEffective === node.path;
+        const valAttr = opts.defaultDirMode && node.path === defaultDir ? "" : node.path;
+        const padLeft = 6 + depth * 14;
+        const badgeCount = isExpanded ? node.directCount : node.totalCount;
+        const badgeHtml =
+          opts.showCounts && badgeCount > 0
+            ? `<span class="tree-badge has-db" title="${esc(`${node.directCount} / ${node.totalCount}`)}">${badgeCount}</span>`
+            : "";
+        const toggleHtml = hasChildren
+          ? `<button type="button" class="tree-toggle" data-toggle="${esc(node.path)}" tabindex="-1">${isExpanded ? "▾" : "▸"}</button>`
+          : `<span class="tree-toggle leaf"></span>`;
+        rows.push(
+          `<div class="tree-row ${isSelected ? "selected" : ""}" data-val="${esc(valAttr)}" title="${esc(`${node.path}/`)}" style="padding-left:${padLeft}px">` +
+            `${toggleHtml}${FOLDER_SVG}` +
+            `<span class="tree-name">${esc(node.name)}</span>` +
+            `${badgeHtml}` +
+            `</div>`
+        );
+        if (hasChildren && isExpanded) {
+          node.children.forEach((child) => renderNode(child, depth + 1));
+        }
+      };
+
+      treeNodes.forEach((node) => renderNode(node, 0));
+
+      if (!rows.length) {
+        listEl.innerHTML = `<div class="text-muted" style="padding:10px;text-align:center;font-size:12px">${esc(t("empty.dash"))}</div>`;
+      } else {
+        listEl.innerHTML = rows.join("");
+      }
+
+      if (opts.allowCustom) {
+        const sel = value === CUSTOM_VAL;
+        footEl.classList.remove("hidden");
+        footEl.innerHTML = `<div class="tree-row special ${sel ? "selected" : ""}" data-val="${esc(CUSTOM_VAL)}" style="padding-left:6px"><span class="tree-toggle leaf"></span><span class="tree-name">${esc(t("def.custom_dir"))}</span></div>`;
+      } else {
+        footEl.classList.add("hidden");
+        footEl.innerHTML = "";
+      }
+    }
+
+    function open() {
+      closeAllDirTrees(apiObj);
+      keyword = "";
+      searchInput.value = "";
+      const activePath = opts.defaultDirMode && !value ? defaultDir : value;
+      ancestorPaths(activePath).forEach((p) => expanded.add(p));
+      renderTreeList();
+      popover.classList.add("open");
+      triggerEl.classList.add("open");
+      triggerEl.setAttribute("aria-expanded", "true");
+      openDirTrees.add(apiObj);
+      positionPopover();
+      const selRow = listEl.querySelector(".tree-row.selected");
+      if (selRow) selRow.scrollIntoView({ block: "nearest" });
+      searchInput.focus();
+    }
+
+    function close() {
+      popover.classList.remove("open");
+      triggerEl.classList.remove("open");
+      triggerEl.setAttribute("aria-expanded", "false");
+      openDirTrees.delete(apiObj);
+    }
+
+    function setData(dirs, countsMap = new Map(), totalDbs = 0, defDir = "samp") {
+      allDirs = [...dirs];
+      directCounts = countsMap;
+      totalDbCount = totalDbs;
+      defaultDir = defDir || "samp";
+      treeNodes = buildDirTreeNodes(allDirs, directCounts);
+      syncTriggerText();
+      if (popover.classList.contains("open")) renderTreeList();
+    }
+
+    function setValue(nextVal, silent = true) {
+      value = nextVal;
+      const activePath = opts.defaultDirMode && !value ? defaultDir : value;
+      ancestorPaths(activePath).forEach((p) => expanded.add(p));
+      syncTriggerText();
+      if (popover.classList.contains("open")) renderTreeList();
+      if (!silent) opts.onChange(value);
+    }
+
+    triggerEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (popover.classList.contains("open")) close();
+      else open();
+    });
+
+    popover.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const toggle = e.target.closest("[data-toggle]");
+      if (toggle) {
+        const path = toggle.dataset.toggle;
+        if (expanded.has(path)) expanded.delete(path);
+        else expanded.add(path);
+        renderTreeList();
+        return;
+      }
+      const row = e.target.closest(".tree-row[data-val]");
+      if (row) {
+        const nextVal = row.dataset.val;
+        close();
+        setValue(nextVal, false);
+      }
+    });
+
+    searchInput.addEventListener("input", (e) => {
+      keyword = e.target.value;
+      renderTreeList();
+    });
+
+    expandBtn.addEventListener("click", () => {
+      const addAll = (nodes) => {
+        nodes.forEach((n) => {
+          if (n.children.length) {
+            expanded.add(n.path);
+            addAll(n.children);
+          }
+        });
+      };
+      addAll(treeNodes);
+      renderTreeList();
+    });
+
+    collapseBtn.addEventListener("click", () => {
+      expanded.clear();
+      renderTreeList();
+    });
+
+    const apiObj = {
+      open,
+      close,
+      isOpen: () => popover.classList.contains("open"),
+      setData,
+      setValue,
+      getValue: () => value,
+      refreshLabels: () => {
+        syncTriggerText();
+        if (popover.classList.contains("open")) renderTreeList();
+      }
+    };
+    return apiObj;
+  }
+
   /* ===================== 单点弹窗多级目录 + 源库自动级联 ===================== */
   function collectedDirs() {
     const list = [];
@@ -287,42 +620,33 @@
     return list;
   }
 
-  function renderTargetDirSelect(selectEl, targetDir = "", allowCustom = true) {
+  function renderTargetDirTree(picker, targetDir = "", allowCustom = true) {
     const defaultDir = state.config.sqlite_dir || "samp";
     const allDirs = collectedDirs();
-    const opts = [`<option value="">${esc(`${defaultDir}/`)}</option>`];
-    const validVals = new Set([""]);
-    allDirs.forEach((d) => {
-      if (d === defaultDir) return;
-      validVals.add(d);
-      opts.push(`<option value="${esc(d)}">${esc(formatDirLabel(d))}</option>`);
-    });
-    if (allowCustom) {
-      opts.push(`<option value="${CUSTOM_VAL}">${esc(t("def.custom_dir"))}</option>`);
-    }
-    selectEl.innerHTML = opts.join("");
+    const validSet = new Set(["", ".", defaultDir, ...allDirs]);
+    picker.setData(allDirs, new Map(), 0, defaultDir);
 
     const norm = String(targetDir || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
     const customInput = allowCustom ? $("f-target-dir-custom") : null;
     if (!norm || norm === defaultDir) {
-      selectEl.value = "";
+      picker.setValue("", true);
       if (customInput) {
         customInput.value = "";
         customInput.classList.add("hidden");
       }
-    } else if (validVals.has(norm)) {
-      selectEl.value = norm;
+    } else if (validSet.has(norm)) {
+      picker.setValue(norm, true);
       if (customInput) {
         customInput.value = "";
         customInput.classList.add("hidden");
       }
     } else if (allowCustom && customInput) {
-      selectEl.value = CUSTOM_VAL;
+      picker.setValue(CUSTOM_VAL, true);
       customInput.value = norm;
       customInput.classList.remove("hidden");
     } else {
-      selectEl.insertAdjacentHTML("beforeend", `<option value="${esc(norm)}">${esc(formatDirLabel(norm))}</option>`);
-      selectEl.value = norm;
+      picker.setData([...allDirs, norm], new Map(), 0, defaultDir);
+      picker.setValue(norm, true);
     }
   }
 
@@ -390,7 +714,6 @@
   }
 
   function renderSourceDirAndDb(targetDb = null) {
-    const dirSel = $("f-source-dir-select");
     const allDbs = state.config.source_databases || [];
     const dirs = collectedDirs();
     const countByDir = new Map();
@@ -400,22 +723,16 @@
       countByDir.set(d, (countByDir.get(d) || 0) + 1);
     });
 
-    const opts = [`<option value="${ALL_DIRS_VAL}">${esc(`${t("def.all_dirs")} (${allDbs.length})`)}</option>`];
-    dirs.forEach((d) => {
-      const cnt = countByDir.get(d) || 0;
-      const suffix = cnt > 0 ? ` (${cnt})` : "";
-      opts.push(`<option value="${esc(d)}">${esc(`${formatDirLabel(d)}${suffix}`)}</option>`);
-    });
-    dirSel.innerHTML = opts.join("");
+    sourceDirTree.setData(dirs, countByDir, allDbs.length, state.config.sqlite_dir || "samp");
 
     const desired = targetDb || allDbs[0] || state.config.default_source_db || "";
+    let chosenDir = ALL_DIRS_VAL;
     if (desired && allDbs.includes(desired) && !/^[a-zA-Z]:/.test(desired) && !desired.startsWith("/")) {
       const d = dirOf(desired);
-      dirSel.value = dirs.includes(d) ? d : ALL_DIRS_VAL;
-    } else {
-      dirSel.value = ALL_DIRS_VAL;
+      chosenDir = dirs.includes(d) ? d : ALL_DIRS_VAL;
     }
-    renderSourceDbForDir(dirSel.value, desired);
+    sourceDirTree.setValue(chosenDir, true);
+    renderSourceDbForDir(chosenDir, desired);
   }
 
   function renderDrawerTableSelect(tables, targetTable = null) {
@@ -805,7 +1122,7 @@
       $("drawer-title").textContent = t("def.drawer_edit", { name: def.samp_name });
       $("f-name").value = def.samp_name;
       $("f-interval").value = def.interval_seconds;
-      renderTargetDirSelect($("f-target-dir-select"), def.target_dir || "", true);
+      renderTargetDirTree(targetDirTree, def.target_dir || "", true);
       $("f-target-name").value = def.target_name || "";
       $("f-enabled").checked = Boolean(def.enabled);
       state.draftItems = buildDraftItems(def);
@@ -813,7 +1130,7 @@
       $("drawer-title").textContent = t("def.drawer_copy");
       $("f-name").value = uniquePointName(def.samp_name);
       $("f-interval").value = def.interval_seconds;
-      renderTargetDirSelect($("f-target-dir-select"), def.target_dir || "", true);
+      renderTargetDirTree(targetDirTree, def.target_dir || "", true);
       $("f-target-name").value = "";
       $("f-enabled").checked = false;
       state.draftItems = buildDraftItems(def);
@@ -821,7 +1138,7 @@
       $("drawer-title").textContent = t("def.drawer_new");
       $("f-name").value = "";
       $("f-interval").value = "60";
-      renderTargetDirSelect($("f-target-dir-select"), "", true);
+      renderTargetDirTree(targetDirTree, "", true);
       $("f-target-name").value = "";
       $("f-enabled").checked = true;
       state.draftItems = buildDraftItems(null);
@@ -843,6 +1160,7 @@
   }
 
   function closeDrawer() {
+    closeAllDirTrees();
     $("drawer-backdrop").classList.remove("open");
   }
 
@@ -1014,7 +1332,7 @@
       // 忽略瞬断
     }
     renderSourceDbSelect($("bw-db"), (state.config.source_databases || [])[0] || state.config.default_source_db, false);
-    renderTargetDirSelect($("bw-target-dir"), "", false);
+    renderTargetDirTree(bwTargetDirTree, "", false);
     $("bw-prefix").value = "";
     $("bw-period").value = "60";
     $("bw-field-mode").value = "numeric";
@@ -1026,7 +1344,7 @@
 
   async function submitBatchWizard() {
     const db = $("bw-db").value;
-    const targetDir = $("bw-target-dir").value.trim();
+    const targetDir = (bwTargetDirTree ? bwTargetDirTree.getValue() : "").trim();
     const enabled = $("bw-enabled").checked;
     const items = [];
     for (const tb of state.bwTables) {
@@ -1200,17 +1518,62 @@
     $("import-cancel").addEventListener("click", () => $("import-backdrop").classList.remove("open"));
     $("import-form").addEventListener("submit", submitImport);
     $("btn-batch-wizard").addEventListener("click", openBatchWizard);
-    $("batch-close").addEventListener("click", () => $("batch-backdrop").classList.remove("open"));
-    $("batch-cancel").addEventListener("click", () => $("batch-backdrop").classList.remove("open"));
+    const closeBatch = () => {
+      closeAllDirTrees();
+      $("batch-backdrop").classList.remove("open");
+    };
+    $("batch-close").addEventListener("click", closeBatch);
+    $("batch-cancel").addEventListener("click", closeBatch);
     $("batch-backdrop").addEventListener("click", (e) => {
-      if (e.target === $("batch-backdrop")) $("batch-backdrop").classList.remove("open");
+      if (e.target === $("batch-backdrop")) closeBatch();
     });
+    document.addEventListener("click", () => closeAllDirTrees());
+    window.addEventListener("resize", () => closeAllDirTrees());
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
+      if (openDirTrees.size > 0) {
+        closeAllDirTrees();
+        return;
+      }
       if ($("drawer-backdrop").classList.contains("open")) closeDrawer();
-      if ($("batch-backdrop").classList.contains("open")) $("batch-backdrop").classList.remove("open");
+      if ($("batch-backdrop").classList.contains("open")) closeBatch();
       if ($("import-backdrop").classList.contains("open")) $("import-backdrop").classList.remove("open");
     });
+
+    // 初始化 3 个可折叠多级目录树选择器
+    targetDirTree = createDirTreePicker($("f-target-dir-trigger"), {
+      allowCustom: true,
+      defaultDirMode: true,
+      onChange: (val) => {
+        const isCustom = val === CUSTOM_VAL;
+        $("f-target-dir-custom").classList.toggle("hidden", !isCustom);
+        if (isCustom) $("f-target-dir-custom").focus();
+        updateTargetPreview();
+        updateRenameWarning();
+      }
+    });
+    sourceDirTree = createDirTreePicker($("f-source-dir-trigger"), {
+      includeAll: true,
+      showCounts: true,
+      onChange: (val) => {
+        renderSourceDbForDir(val, null);
+        const db = currentSourceDb();
+        if (db) {
+          loadDrawerTables(null, null, true);
+        } else {
+          state.drawerTables = [];
+          state.sourceData = null;
+          renderDrawerTableSelect([], null);
+          $("f-fields").innerHTML = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
+          $("preview-meta").textContent = t("empty.dash");
+          $("preview-wrap").innerHTML = "";
+        }
+      }
+    });
+    bwTargetDirTree = createDirTreePicker($("bw-target-dir-trigger"), {
+      defaultDirMode: true
+    });
+    $("def-form").querySelector(".drawer-body").addEventListener("scroll", () => closeAllDirTrees());
     $("batch-submit").addEventListener("click", submitBatchWizard);
     $("bw-db").addEventListener("change", loadBatchWizardTables);
     $("bw-field-mode").addEventListener("change", renderBatchWizardTable);
@@ -1280,21 +1643,7 @@
       if (tab) switchDraftItem(Number(tab.dataset.itemIdx));
     });
 
-    // 单点弹窗：源目录 / 源库 / 源表自动级联
-    $("f-source-dir-select").addEventListener("change", (e) => {
-      renderSourceDbForDir(e.target.value, null);
-      const db = currentSourceDb();
-      if (db) {
-        loadDrawerTables(null, null, true);
-      } else {
-        state.drawerTables = [];
-        state.sourceData = null;
-        renderDrawerTableSelect([], null);
-        $("f-fields").innerHTML = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
-        $("preview-meta").textContent = t("empty.dash");
-        $("preview-wrap").innerHTML = "";
-      }
-    });
+    // 单点弹窗：源库 / 源表自动级联
     $("f-source-db-select").addEventListener("change", (e) => {
       const isCustom = e.target.value === CUSTOM_VAL;
       $("f-source-db-custom").classList.toggle("hidden", !isCustom);
@@ -1380,13 +1729,6 @@
       updateRenameWarning();
       validateNameInput();
     });
-    $("f-target-dir-select").addEventListener("change", (e) => {
-      const isCustom = e.target.value === CUSTOM_VAL;
-      $("f-target-dir-custom").classList.toggle("hidden", !isCustom);
-      if (isCustom) $("f-target-dir-custom").focus();
-      updateTargetPreview();
-      updateRenameWarning();
-    });
     $("f-target-dir-custom").addEventListener("input", () => {
       updateTargetPreview();
       updateRenameWarning();
@@ -1451,13 +1793,11 @@
       renderMetrics();
       renderTable();
       renderBatchWizardTable();
+      targetDirTree?.refreshLabels();
+      sourceDirTree?.refreshLabels();
+      bwTargetDirTree?.refreshLabels();
       if ($("drawer-backdrop").classList.contains("open")) {
-        renderTargetDirSelect($("f-target-dir-select"), currentTargetDir(), true);
-        renderSourceDirAndDb(currentSourceDb());
         renderItemsStrip();
-      }
-      if ($("batch-backdrop").classList.contains("open")) {
-        renderTargetDirSelect($("bw-target-dir"), $("bw-target-dir").value, false);
       }
     });
   }
