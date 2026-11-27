@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="minimalist-light">
+<html lang="zh-CN" data-theme="ethereal-aurora" data-color-scheme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -175,7 +175,7 @@
           </div>
           <div class="kpi-body">
             <div class="kpi-label" data-i18n="dash.kpi_defs">采样定义</div>
-            <div class="kpi-val"><strong id="kpi-defs-val">0 / 0</strong><span data-i18n="dash.kpi_defs_sub">启用 / 总数</span></div>
+            <div class="kpi-val"><strong id="kpi-defs-val">0 / 0</strong></div>
           </div>
         </div>
 
@@ -215,7 +215,7 @@
           </div>
           <div class="kpi-body">
             <div class="kpi-label" data-i18n="dash.kpi_runs">调度执行</div>
-            <div class="kpi-val"><strong id="kpi-runs-val">0 / 0</strong><span data-i18n="dash.kpi_runs_sub">成功 / 失败</span></div>
+            <div class="kpi-val"><strong id="kpi-runs-val">0 / 0</strong></div>
           </div>
         </div>
       </section>
@@ -285,7 +285,7 @@
               <defs>
                 <linearGradient id="hud-arc-grad" x1="0%" y1="0%" x2="100%" y2="100%">
                   <stop offset="0%" stop-color="var(--accent)"/>
-                  <stop offset="52%" stop-color="#c4b5fd"/>
+                  <stop offset="52%" stop-color="var(--accent-secondary)"/>
                   <stop offset="100%" stop-color="var(--ok)"/>
                 </linearGradient>
               </defs>
@@ -293,7 +293,7 @@
               <circle cx="60" cy="60" r="44" fill="none" stroke="var(--border-color)" stroke-opacity="0.45" stroke-width="8"/>
               <circle id="hud-gauge-arc" cx="60" cy="60" r="44" fill="none" stroke="url(#hud-arc-grad)" stroke-width="8" stroke-linecap="round"
                       stroke-dasharray="276.46" stroke-dashoffset="276.46" transform="rotate(-90 60 60)"/>
-              <circle cx="60" cy="60" r="31" fill="none" stroke="#c4b5fd" stroke-opacity="0.28" stroke-width="1"/>
+              <circle cx="60" cy="60" r="31" fill="none" stroke="var(--accent-secondary)" stroke-opacity="0.28" stroke-width="1"/>
             </svg>
             <div class="hud-readout">
               <div class="hud-title" data-i18n="dash.center_title">采样成功率</div>

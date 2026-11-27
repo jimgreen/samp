@@ -2257,8 +2257,14 @@ class Store:
     def summary(self) -> dict[str, int]:
         with self._connect(self.definition_db) as conn:
             definitions, enabled = conn.execute("SELECT COUNT(*),COALESCE(SUM(enabled),0) FROM samp_define").fetchone()
-        result_databases = len(self.list_result_databases())
-        return {"definitions": definitions, "enabled": enabled, "result_databases": result_databases}
+        dbs = self.list_result_databases()
+        result_size_bytes = sum(int(item.get("size_bytes") or 0) for item in dbs)
+        return {
+            "definitions": definitions,
+            "enabled": enabled,
+            "result_databases": len(dbs),
+            "result_size_bytes": result_size_bytes,
+        }
 
     def status(self) -> dict[str, Any]:
         summary = self.summary()

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="minimalist-light">
+<html lang="zh-CN" data-theme="ethereal-aurora" data-color-scheme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -137,6 +137,10 @@
           <span data-i18n="dash.side_dbs">结果库</span>
           <strong id="side-dbs">—</strong>
         </div>
+        <div class="health-row">
+          <span data-i18n="dash.side_size">占用</span>
+          <strong id="side-size">—</strong>
+        </div>
       </div>
     </aside>
 
@@ -238,13 +242,13 @@
         <div class="form-row">
           <div class="input-inline" style="justify-content:space-between">
             <label for="f-name" data-i18n="def.label_name">采样点名</label>
-            <span id="f-name-hint" class="text-danger" style="font-size:11px"></span>
+            <span id="f-name-hint" class="text-danger form-hint"></span>
           </div>
           <input id="f-name" class="ctrl" required data-i18n-placeholder="def.ph_name" placeholder="如：电表A">
         </div>
 
         <div class="form-row" style="justify-content:flex-end">
-          <label class="field-pill" style="height:28px;width:fit-content">
+          <label class="field-pill pill-md" style="width:fit-content">
             <input type="checkbox" id="f-enabled" checked>
             <span data-i18n="def.label_enabled">启用自动采样</span>
           </label>
@@ -253,7 +257,7 @@
         <div class="form-row span-2">
           <div class="schedule-box">
             <div class="schedule-head">
-              <label style="font-size:11px;font-weight:600;color:var(--text-secondary)" data-i18n="col.start_mode">启动方式</label>
+              <label data-i18n="col.start_mode">启动方式</label>
               <div class="tabs" id="start-mode-tabs">
                 <button type="button" class="tab-btn active" data-start-mode="periodic" data-i18n="mode.periodic">周期采样</button>
                 <button type="button" class="tab-btn" data-start-mode="fixed" data-i18n="mode.fixed">定点采样</button>
@@ -315,12 +319,12 @@
                 </select>
                 <input id="tg-val" class="ctrl mono" style="width:70px" value="1" data-i18n-placeholder="trig.val" data-i18n-title="trig.val" placeholder="触发值">
                 <input id="tg-reset" class="ctrl mono" style="width:70px" value="0" data-i18n-placeholder="trig.reset" data-i18n-title="trig.reset" placeholder="复位值">
-                <label class="field-pill" style="height:26px">
+                <label class="field-pill pill-md">
                   <input type="checkbox" id="tg-auto-reset" checked>
                   <span data-i18n="trig.auto_reset">采样后自动复位</span>
                 </label>
               </div>
-              <div id="tg-builtin-hint" class="mono text-muted" style="font-size:11px"></div>
+              <div id="tg-builtin-hint" class="mono text-muted form-hint"></div>
               <div id="tg-ext-row" class="chip-row hidden">
                 <select id="tg-db" class="select-ctrl mono" style="flex:1.2 1 170px" data-i18n-title="trig.db"></select>
                 <select id="tg-table" class="select-ctrl mono" style="flex:0.9 1 120px" data-i18n-title="trig.table"></select>
@@ -354,7 +358,7 @@
       <!-- 同采样点多采集项（一库多表）切换与增删 -->
       <div class="items-panel">
         <div class="items-panel-head">
-          <label style="font-size:11px;font-weight:600;color:var(--text-secondary)">
+          <label class="form-hint" style="font-size:12px;font-weight:600;color:var(--text-secondary)">
             <span data-i18n="def.items_label">采集项</span>
             <span class="mono text-muted" id="items-count-badge">(1)</span>
           </label>
@@ -367,7 +371,7 @@
         <div class="form-row span-2">
           <div class="input-inline" style="justify-content:space-between">
             <label for="f-source-dir-trigger" data-i18n="def.label_source_db">源数据库</label>
-            <span id="f-root-hint" class="mono text-muted" style="font-size:11px"></span>
+            <span id="f-root-hint" class="mono text-muted form-hint"></span>
           </div>
           <div class="input-inline">
             <button type="button" id="f-source-dir-trigger" class="tree-trigger mono" style="flex:1.35 1 240px" aria-haspopup="tree" aria-expanded="false">
@@ -398,7 +402,7 @@
           <div class="input-inline" style="justify-content:space-between">
             <label data-i18n="def.label_fields">采样字段</label>
             <div class="chip-row">
-              <label class="field-pill" style="height:22px;padding:0 6px;font-size:11px">
+              <label class="field-pill">
                 <input type="checkbox" id="f-all-fields">
                 <span data-i18n="def.all_fields_wild">全表(*)</span>
               </label>
@@ -475,12 +479,16 @@
         <span class="tree-trigger-text">samp/</span>
         <svg class="ico ico-xs tree-caret" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
-      <input id="ts-default-period" type="number" min="0" value="60" class="ctrl mono" style="width:64px" data-i18n-title="def.label_interval">
+      <span class="batch-unit-group">
+        <span data-i18n="col.interval">周期</span>
+        <input id="ts-default-period" type="number" min="0" value="60" class="ctrl mono" style="width:68px" data-i18n-title="def.label_interval">
+        <span class="mono" data-i18n="unit.sec">s</span>
+      </span>
       <select id="ts-conflict" class="select-ctrl">
         <option value="overwrite" data-i18n="def.import_overwrite">覆盖同名</option>
         <option value="skip" data-i18n="def.import_skip">跳过同名</option>
       </select>
-      <label class="field-pill">
+      <label class="field-pill pill-md">
         <input type="checkbox" id="ts-enabled" checked>
         <span data-i18n="state.enabled">启用</span>
       </label>
@@ -512,7 +520,7 @@
             <div class="input-inline" style="justify-content:space-between">
               <label data-i18n="def.label_fields">采样字段</label>
               <div class="chip-row">
-                <label class="field-pill" style="height:22px;padding:0 6px;font-size:11px">
+                <label class="field-pill">
                   <input type="checkbox" id="ts-all-fields" checked>
                   <span data-i18n="def.all_fields_wild">全表(*)</span>
                 </label>

@@ -48,12 +48,6 @@ const THEME_SWATCHES = {
 const LANG_STORAGE_KEY = "samp_lang";
 const THEME_STORAGE_KEY = "samp_theme";
 const ACK_STORAGE_KEY = "samp_acked_alarms";
-const SIDEBAR_WIDTH_KEY = "samp_sidebar_width";
-const SIDEBAR_COLLAPSED_KEY = "samp_sidebar_collapsed";
-const SIDEBAR_DEFAULT_WIDTH = 192;
-const SIDEBAR_MIN_WIDTH = 148;
-const SIDEBAR_MAX_WIDTH = 320;
-const SIDEBAR_SNAP_HIDE = 96;
 const SUPPORTED_LANGS = ["zh-CN", "en-US", "ru-RU"];
 const SUPPORTED_THEMES = Object.keys(THEME_SWATCHES);
 const DARK_THEMES = new Set(SUPPORTED_THEMES.filter((k) => THEME_SWATCHES[k].group === "dark"));
@@ -353,76 +347,6 @@ async function pollAlarms() {
   } catch {}
 }
 
-/* ===================== 左侧目录显隐与可拖拽分隔符 ===================== */
-function initSidebar() {
-  const shell = document.querySelector(".app-shell");
-  if (!shell) return;
-  const resizer = $("sidebar-resizer");
-  const toggleButtons = document.querySelectorAll("[data-sidebar-toggle]");
-
-  const clampWidth = (w) => Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, Math.round(w)));
-
-  const setWidth = (w) => {
-    const val = clampWidth(w);
-    shell.style.setProperty("--sidebar-width", `${val}px`);
-    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(val));
-  };
-
-  const setCollapsed = (collapsed) => {
-    shell.classList.toggle("sidebar-collapsed", Boolean(collapsed));
-    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
-    window.dispatchEvent(new Event("resize"));
-  };
-
-  const savedW = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
-  if (Number.isFinite(savedW) && savedW >= SIDEBAR_MIN_WIDTH) {
-    shell.style.setProperty("--sidebar-width", `${clampWidth(savedW)}px`);
-  }
-  if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1") {
-    shell.classList.add("sidebar-collapsed");
-  }
-
-  toggleButtons.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      setCollapsed(!shell.classList.contains("sidebar-collapsed"));
-    });
-  });
-
-  if (resizer) {
-    let dragging = false;
-    resizer.addEventListener("mousedown", (event) => {
-      if (event.button !== 0) return;
-      event.preventDefault();
-      dragging = true;
-      document.body.classList.add("resizing-sidebar");
-    });
-
-    window.addEventListener("mousemove", (event) => {
-      if (!dragging) return;
-      if (event.clientX < SIDEBAR_SNAP_HIDE) {
-        dragging = false;
-        document.body.classList.remove("resizing-sidebar");
-        setCollapsed(true);
-        return;
-      }
-      setWidth(event.clientX);
-    });
-
-    window.addEventListener("mouseup", () => {
-      if (!dragging) return;
-      dragging = false;
-      document.body.classList.remove("resizing-sidebar");
-      window.dispatchEvent(new Event("resize"));
-    });
-
-    resizer.addEventListener("dblclick", () => {
-      setCollapsed(false);
-      setWidth(SIDEBAR_DEFAULT_WIDTH);
-      window.dispatchEvent(new Event("resize"));
-    });
-  }
-}
-
 /* ===================== 全站统一左栏双模式（悬浮/内嵌 + 均可隐藏）与指挥舱桥时钟 ===================== */
 const SIDEBAR_MODE_KEY = "samp_sidebar_mode";
 const SIDEBAR_HIDDEN_KEY = "samp_sidebar_hidden";
@@ -694,6 +618,10 @@ async function pollConnHealth() {
       if (sideDbs && dbCount !== undefined) {
         sideDbs.textContent = String(dbCount);
       }
+      const sideSize = $("side-size");
+      if (sideSize && data.result_size_bytes !== undefined) {
+        sideSize.textContent = formatBytes(data.result_size_bytes);
+      }
     }
   } catch {
     _connOk = false;
@@ -703,7 +631,6 @@ async function pollConnHealth() {
 
 function initChrome({ pollGlobalAlarms = true } = {}) {
   applyTheme(getTheme());
-  initSidebar();
   initPortalSidebar();
   initBridgeClock();
   initFullscreenToggle();
@@ -974,6 +901,17 @@ function setAllFields(container, checked) {
   container.dispatchEvent(new Event("change"));
 }
 
+function formatFieldTypeTag(rawType) {
+  const upper = String(rawType || "").trim().toUpperCase();
+  if (!upper) return "";
+  if (upper.startsWith("INT")) return "INT";
+  if (upper.startsWith("REAL") || upper.startsWith("FLOA") || upper.startsWith("DOUB")) return "REAL";
+  if (upper.startsWith("TEXT") || upper.startsWith("CHAR") || upper.startsWith("CLOB") || upper.startsWith("STR")) return "TEXT";
+  if (upper.startsWith("NUM") || upper.startsWith("DEC")) return "NUM";
+  if (upper.startsWith("BLOB")) return "BLOB";
+  return upper.slice(0, 6);
+}
+
 function renderFieldChecks(container, fields, checked, fieldTypes = {}, fieldLabels = {}, filterKeyword = "") {
   const kw = (filterKeyword || "").trim().toLowerCase();
   const list = (fields || []).filter((f) => f !== "row_key" && f !== "sample_time");
@@ -987,7 +925,8 @@ function renderFieldChecks(container, fields, checked, fieldTypes = {}, fieldLab
       const chn = fieldLabels[field] || "";
       const hidden = kw && !field.toLowerCase().includes(kw) && !chn.toLowerCase().includes(kw);
       const labelHtml = chn ? `<span class="field-chn">${esc(chn)}</span>` : "";
-      const fType = fieldTypes[field] ? `<span class="field-type-tag">${esc(fieldTypes[field].slice(0, 3))}</span>` : "";
+      const typeTag = formatFieldTypeTag(fieldTypes[field]);
+      const fType = typeTag ? `<span class="field-type-tag">${esc(typeTag)}</span>` : "";
       return `<label class="field-pill ${hidden ? "hidden" : ""}" title="${esc(chn ? `${field} · ${chn}` : field)}"><input type="checkbox" value="${esc(field)}" ${checkedSet.has(field) ? "checked" : ""}><span>${esc(field)}</span>${labelHtml}${fType}</label>`;
     })
     .join("");

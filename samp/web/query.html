@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="minimalist-light">
+<html lang="zh-CN" data-theme="ethereal-aurora" data-color-scheme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -137,6 +137,10 @@
           <span data-i18n="dash.side_dbs">结果库</span>
           <strong id="side-dbs">—</strong>
         </div>
+        <div class="health-row">
+          <span data-i18n="dash.side_size">占用</span>
+          <strong id="side-size">—</strong>
+        </div>
       </div>
     </aside>
 
@@ -174,7 +178,7 @@
           </div>
         </div>
         <div class="toolbar-group">
-          <select id="q-snap-time" class="select-ctrl mono" style="max-width:162px">
+          <select id="q-snap-time" class="select-ctrl mono" style="min-width:136px;max-width:176px">
             <option value="" data-i18n="q.all_times">全部时刻</option>
           </select>
           <label class="diff-chip disabled" id="q-diff-wrap">

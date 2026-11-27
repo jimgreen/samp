@@ -325,6 +325,8 @@
     const danger = style.getPropertyValue("--danger").trim() || "#DC2626";
     const textSec = style.getPropertyValue("--text-secondary").trim() || "#64748B";
     const border = style.getPropertyValue("--border-color").trim() || "#E2E8F0";
+    const fontSans = style.getPropertyValue("--font-sans").trim() || "Inter, Segoe UI, Microsoft YaHei, sans-serif";
+    const fontMono = style.getPropertyValue("--font-mono").trim() || "JetBrains Mono, Consolas, monospace";
 
     const w = rect.width;
     const h = rect.height;
@@ -333,14 +335,14 @@
     const data = [...(logs || [])].reverse().slice(-32);
     if (!data.length) {
       ctx.fillStyle = textSec;
-      ctx.font = "12px Inter, sans-serif";
+      ctx.font = `12px ${fontSans}`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(t("dash.empty_logs"), w / 2, h / 2);
       return;
     }
 
-    const pad = { top: 14, right: 38, bottom: 22, left: 38 };
+    const pad = { top: 14, right: 44, bottom: 24, left: 44 };
     const cw = Math.max(40, w - pad.left - pad.right);
     const ch = Math.max(40, h - pad.top - pad.bottom);
 
@@ -351,7 +353,7 @@
     ctx.strokeStyle = border;
     ctx.globalAlpha = 0.45;
     ctx.lineWidth = 1;
-    ctx.font = "10px Consolas, monospace";
+    ctx.font = `11px ${fontMono}`;
     for (let i = 0; i <= 3; i += 1) {
       const y = pad.top + (ch * i) / 3;
       ctx.beginPath();
@@ -361,13 +363,13 @@
 
       const msVal = Math.round(maxMs * (1 - i / 3));
       const rowVal = Math.round(maxRows * (1 - i / 3));
-      ctx.globalAlpha = 0.85;
+      ctx.globalAlpha = 0.9;
       ctx.fillStyle = textSec;
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
-      ctx.fillText(`${msVal}`, pad.left - 5, y);
+      ctx.fillText(`${msVal}`, pad.left - 6, y);
       ctx.textAlign = "left";
-      ctx.fillText(`${rowVal}`, pad.left + cw + 5, y);
+      ctx.fillText(`${rowVal}`, pad.left + cw + 6, y);
       ctx.globalAlpha = 0.45;
     }
     ctx.globalAlpha = 1;
@@ -428,12 +430,12 @@
       return `${p2(dt.getHours())}:${p2(dt.getMinutes())}:${p2(dt.getSeconds())}`;
     };
     ctx.fillStyle = textSec;
-    ctx.font = "10px Consolas, monospace";
+    ctx.font = `11px ${fontMono}`;
     ctx.textBaseline = "top";
     ctx.textAlign = "left";
-    ctx.fillText(fmtShort(data[0].finished_at), pad.left, pad.top + ch + 5);
+    ctx.fillText(fmtShort(data[0].finished_at), pad.left, pad.top + ch + 6);
     ctx.textAlign = "right";
-    ctx.fillText(fmtShort(data[data.length - 1].finished_at), pad.left + cw, pad.top + ch + 5);
+    ctx.fillText(fmtShort(data[data.length - 1].finished_at), pad.left + cw, pad.top + ch + 6);
   }
 
   /* ===================== 右下实时流水 / 热点采样点 / 存储 Top ===================== */

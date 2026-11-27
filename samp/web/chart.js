@@ -1,11 +1,41 @@
 /* 零外部依赖 Canvas 2D 交互式多量纲时序趋势图组件
-   - 全量适配 8 套官方主题（minimalist-light / precision-dark / bento-grid / glassmorphism / editorial / sci-fi-cyan / sci-fi-purple / sci-fi-matrix）
-   - 遵循 scientific-dashboard 规范：无纯白描边、半透明胶囊浮标、单曲线克制渐变填充（12% -> 0%）、色盲友好序列色
+   - 全量适配 16 套官方主题（含仙境云岚晨露 cloud-lotus 与星雾极光 ethereal-aurora）
+   - 遵循工程数据看板规范：无纯白描边、半透明胶囊浮标、单曲线克制渐变填充（13% -> 0%）、色盲友好序列色
    - 视图模式：shared（同轴） / normalized（0-100% 归一化，Tooltip 显示真实物理值） / stacked（分轨堆叠）
 */
 
 (function () {
   const PALETTES = {
+    "cloud-lotus": {
+      bg: "#FFFFFF",
+      grid: "rgba(139, 132, 232, 0.18)",
+      axis: "rgba(124, 107, 246, 0.34)",
+      text: "#505A7E",
+      crosshair: "rgba(109, 99, 242, 0.58)",
+      pinned: "#6D63F2",
+      selectionBg: "rgba(109, 99, 242, 0.14)",
+      selectionBorder: "#6D63F2",
+      labelBg: "rgba(255, 255, 255, 0.96)",
+      labelBorder: "rgba(124, 107, 246, 0.32)",
+      labelText: "#1F2440",
+      laneBorder: "rgba(139, 132, 232, 0.22)",
+      series: ["#6D63F2", "#0F9B8E", "#D97706", "#E11D48", "#8B5CF6", "#0284C7", "#059669", "#EA580C"]
+    },
+    "ethereal-aurora": {
+      bg: "#131A36",
+      grid: "rgba(165, 196, 255, 0.11)",
+      axis: "rgba(147, 197, 253, 0.28)",
+      text: "#A9BAE3",
+      crosshair: "rgba(125, 211, 252, 0.70)",
+      pinned: "#7DD3FC",
+      selectionBg: "rgba(125, 211, 252, 0.16)",
+      selectionBorder: "#7DD3FC",
+      labelBg: "rgba(15, 22, 48, 0.96)",
+      labelBorder: "rgba(147, 197, 253, 0.34)",
+      labelText: "#EEF4FF",
+      laneBorder: "rgba(165, 196, 255, 0.16)",
+      series: ["#7DD3FC", "#5EEAD4", "#C4B5FD", "#FCD34D", "#FDA4AF", "#38BDF8", "#A78BFA", "#FB923C"]
+    },
     "minimalist-light": {
       bg: "#FFFFFF",
       grid: "#E2E8F0",
@@ -220,7 +250,15 @@
 
   function chartPalette() {
     const theme = document.documentElement.getAttribute("data-theme");
-    return PALETTES[theme] || PALETTES["minimalist-light"];
+    return PALETTES[theme] || PALETTES["ethereal-aurora"];
+  }
+
+  function canvasFonts() {
+    const cs = getComputedStyle(document.documentElement);
+    return {
+      sans: cs.getPropertyValue("--font-sans").trim() || "Inter, Segoe UI, Microsoft YaHei, sans-serif",
+      mono: cs.getPropertyValue("--font-mono").trim() || "JetBrains Mono, Consolas, monospace"
+    };
   }
 
   function hexToRgba(hex, alpha) {
@@ -289,7 +327,7 @@
       this.dragStartPx = 0;
       this.dragCurrPx = 0;
       this.dragStartView = null;
-      this.pad = { top: 12, right: 14, bottom: 24, left: 60 };
+      this.pad = { top: 14, right: 20, bottom: 26, left: 64 };
 
       this._rafId = null;
       this._bindEvents();
@@ -653,13 +691,14 @@
       ctx.save();
       ctx.scale(dpr, dpr);
       const pal = chartPalette();
+      const fonts = canvasFonts();
       ctx.fillStyle = pal.bg;
       ctx.fillRect(0, 0, width, height);
 
       const visibleLines = this.lines.filter((l) => !l.hidden);
       if (!visibleLines.length) {
         ctx.fillStyle = pal.text;
-        ctx.font = "12px Inter, Segoe UI, Microsoft YaHei, sans-serif";
+        ctx.font = `12px ${fonts.sans}`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText(window.SAMP.t("empty.dash"), width / 2, height / 2);
@@ -680,8 +719,8 @@
       if (stacked) {
         const laneGap = 4;
         const count = visibleLines.length;
-        const laneH = Math.max(18, (plot.h - laneGap * (count - 1)) / count);
-        ctx.font = "10px JetBrains Mono, Consolas, monospace";
+        const laneH = Math.max(20, (plot.h - laneGap * (count - 1)) / count);
+        ctx.font = `11px ${fonts.mono}`;
 
         visibleLines.forEach((line, idx) => {
           const ly = plot.y + idx * (laneH + laneGap);
@@ -699,9 +738,9 @@
           ctx.fillStyle = pal.text;
           ctx.textAlign = "right";
           ctx.textBaseline = "top";
-          ctx.fillText(formatAxisVal(yMax), plot.x - 5, ly + 1);
+          ctx.fillText(formatAxisVal(yMax), plot.x - 6, ly + 1);
           ctx.textBaseline = "bottom";
-          ctx.fillText(formatAxisVal(yMin), plot.x - 5, ly + laneH - 1);
+          ctx.fillText(formatAxisVal(yMin), plot.x - 6, ly + laneH - 1);
 
           const tag = line.label;
           const tw = ctx.measureText(tag).width + 10;
@@ -709,7 +748,7 @@
           ctx.strokeStyle = pal.labelBorder;
           ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.roundRect(plot.x + 4, ly + 2, tw, 14, 3);
+          ctx.roundRect(plot.x + 4, ly + 2, tw, 16, 4);
           ctx.fill();
           ctx.stroke();
           ctx.fillStyle = line.color;
@@ -746,7 +785,7 @@
         this._sharedRange = !normalized ? [sharedMin, sharedMax] : null;
 
         const yTicks = 4;
-        ctx.font = "11px JetBrains Mono, Consolas, monospace";
+        ctx.font = `11px ${fonts.mono}`;
         ctx.textAlign = "right";
         ctx.textBaseline = "middle";
         for (let i = 0; i <= yTicks; i += 1) {
@@ -767,13 +806,13 @@
         // 左上角紧凑 Y 轴物理量纲/名称提示（半透明胶囊）
         const axisTag = normalized ? "%" : visibleLines.length === 1 ? visibleLines[0].label : "";
         if (axisTag) {
-          ctx.font = "10px JetBrains Mono, Consolas, monospace";
+          ctx.font = `11px ${fonts.mono}`;
           const tw = ctx.measureText(axisTag).width + 10;
           ctx.fillStyle = pal.labelBg;
           ctx.strokeStyle = pal.labelBorder;
           ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.roundRect(plot.x + 4, plot.y + 2, tw, 15, 3);
+          ctx.roundRect(plot.x + 4, plot.y + 2, tw, 16, 4);
           ctx.fill();
           ctx.stroke();
           ctx.fillStyle = pal.text;
@@ -794,22 +833,22 @@
         }
       }
 
-      // X 轴底线与时间刻度
+      // X 轴底线与时间刻度（首刻度左对齐、末刻度右对齐，彻底防边界裁切）
       ctx.beginPath();
       ctx.strokeStyle = pal.axis;
       ctx.moveTo(plot.x, plot.y + plot.h + 0.5);
       ctx.lineTo(plot.x + plot.w, plot.y + plot.h + 0.5);
       ctx.stroke();
 
-      const xTicks = Math.max(2, Math.min(7, Math.floor(plot.w / 120)));
-      ctx.font = "11px JetBrains Mono, Consolas, monospace";
-      ctx.textAlign = "center";
+      const xTicks = Math.max(2, Math.min(7, Math.floor(plot.w / 128)));
+      ctx.font = `11px ${fonts.mono}`;
       ctx.textBaseline = "top";
       ctx.fillStyle = pal.text;
       for (let i = 0; i <= xTicks; i += 1) {
         const ratio = i / xTicks;
         const ts = xMin + ratio * xSpan;
-        ctx.fillText(formatAxisTime(ts, xSpan), plot.x + ratio * plot.w, plot.y + plot.h + 5);
+        ctx.textAlign = i === 0 ? "left" : i === xTicks ? "right" : "center";
+        ctx.fillText(formatAxisTime(ts, xSpan), plot.x + ratio * plot.w, plot.y + plot.h + 6);
       }
 
       // 绘制曲线（单曲线或分轨各自独立泳道支持克制渐变面积填充）
@@ -849,7 +888,7 @@
           { val: this.thresholds.low, color: cs.getPropertyValue("--warn").trim() || "#D97706", tag: "L" },
           { val: this.thresholds.high, color: cs.getPropertyValue("--danger").trim() || "#DC2626", tag: "H" }
         ];
-        ctx.font = "10px JetBrains Mono, Consolas, monospace";
+        ctx.font = `11px ${fonts.mono}`;
         for (const r of refs) {
           if (r.val === null) continue;
           const ry = Math.round(plot.y + plot.h - ((r.val - sMin) / sSpan) * plot.h) + 0.5;
@@ -866,18 +905,18 @@
           const text = `${r.tag}: ${formatAxisVal(r.val)}`;
           const tw = ctx.measureText(text).width + 10;
           const bx = plot.x + plot.w - tw - 4;
-          const by = Math.max(plot.y + 2, Math.min(plot.y + plot.h - 16, ry - 7));
+          const by = Math.max(plot.y + 2, Math.min(plot.y + plot.h - 17, ry - 8));
           ctx.fillStyle = pal.labelBg;
           ctx.strokeStyle = r.color;
           ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.roundRect(bx, by, tw, 14, 3);
+          ctx.roundRect(bx, by, tw, 16, 4);
           ctx.fill();
           ctx.stroke();
           ctx.fillStyle = r.color;
           ctx.textAlign = "left";
           ctx.textBaseline = "top";
-          ctx.fillText(text, bx + 5, by + 2);
+          ctx.fillText(text, bx + 5, by + 3);
         }
       }
 
@@ -895,21 +934,21 @@
       if (this.pinnedTime !== null && this.pinnedTime >= xMin && this.pinnedTime <= xMax) {
         const px = xToPx(this.pinnedTime);
         const text = window.SAMP.formatTime(this.pinnedTime, true);
-        ctx.font = "10px JetBrains Mono, Consolas, monospace";
+        ctx.font = `11px ${fonts.mono}`;
         const tw = ctx.measureText(text).width + 10;
         const bx = Math.max(plot.x, Math.min(plot.x + plot.w - tw, px - tw / 2));
-        const by = plot.y + plot.h - 17;
+        const by = plot.y + plot.h - 18;
         ctx.fillStyle = pal.labelBg;
         ctx.strokeStyle = pal.pinned;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.roundRect(bx, by, tw, 15, 3);
+        ctx.roundRect(bx, by, tw, 16, 4);
         ctx.fill();
         ctx.stroke();
         ctx.fillStyle = pal.pinned;
         ctx.textAlign = "left";
         ctx.textBaseline = "top";
-        ctx.fillText(text, bx + 5, by + 2);
+        ctx.fillText(text, bx + 5, by + 3);
       }
 
       if (

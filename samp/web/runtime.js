@@ -358,7 +358,7 @@
       $("inspect-db-cols").innerHTML = (activeMeta?.columns || [])
         .map(
           (col) =>
-            `<span class="field-pill mono" style="height:20px;font-size:11px;cursor:default">${esc(col.name)} <span class="field-type-tag">${esc(col.type || "TEXT")}</span></span>`
+            `<span class="field-pill mono" style="cursor:default">${esc(col.name)} <span class="field-type-tag">${esc(col.type || "TEXT")}</span></span>`
         )
         .join("");
 
@@ -545,11 +545,11 @@
       if (!btn || !state.inspectPath) return;
       openInspectDb(state.inspectPath, btn.dataset.inspTable);
     });
-    $("inspect-db-close").addEventListener("click", () => {
-      $("inspect-db-backdrop").classList.remove("open");
-    });
+    const closeInspectModal = () => $("inspect-db-backdrop").classList.remove("open");
+    $("inspect-db-close").addEventListener("click", closeInspectModal);
+    $("inspect-db-close-top")?.addEventListener("click", closeInspectModal);
     $("inspect-db-backdrop").addEventListener("click", (e) => {
-      if (e.target === $("inspect-db-backdrop")) $("inspect-db-backdrop").classList.remove("open");
+      if (e.target === $("inspect-db-backdrop")) closeInspectModal();
     });
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && $("inspect-db-backdrop").classList.contains("open")) {

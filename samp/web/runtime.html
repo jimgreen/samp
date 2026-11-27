@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="minimalist-light">
+<html lang="zh-CN" data-theme="ethereal-aurora" data-color-scheme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -137,6 +137,10 @@
           <span data-i18n="dash.side_dbs">结果库</span>
           <strong id="side-dbs">—</strong>
         </div>
+        <div class="health-row">
+          <span data-i18n="dash.side_size">占用</span>
+          <strong id="side-size">—</strong>
+        </div>
       </div>
     </aside>
 
@@ -268,9 +272,12 @@
 <!-- 结果库在线透视模态框 -->
 <div class="modal-backdrop" id="inspect-db-backdrop">
   <div class="modal modal-accent modal-wide" role="dialog" aria-modal="true">
-    <div class="modal-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+    <div class="modal-head">
       <span id="inspect-db-title" class="mono">—</span>
-      <span id="inspect-db-meta" class="mono text-muted" style="font-size:11px;font-weight:500">—</span>
+      <div class="modal-head-right">
+        <span id="inspect-db-meta" class="mono text-muted form-hint">—</span>
+        <button type="button" class="btn ghost xs" id="inspect-db-close-top" data-i18n="action.close">关闭</button>
+      </div>
     </div>
     <div class="modal-body">
       <div class="inspect-tabs" id="inspect-db-tables"></div>
