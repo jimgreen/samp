@@ -1,14 +1,30 @@
-/* 运行监控、执行日志与结果库管理逻辑（单次 /api/status 消除 N+1） */
+/* 运行监控、执行日志与结果库管理逻辑（含 Sparkline、异常置顶、Data Bar、在线透视与 VACUUM） */
 
 (function () {
-  const { $, esc, t, ICONS, api, toast, confirmModal, formatTime, formatBytes, syncAlarmsFromStatus, initChrome, onLangChange } = window.SAMP;
+  const {
+    $,
+    esc,
+    t,
+    ICONS,
+    api,
+    toast,
+    confirmModal,
+    formatTime,
+    formatBytes,
+    syncAlarmsFromStatus,
+    initChrome,
+    onLangChange,
+    onThemeChange
+  } = window.SAMP;
 
   const state = {
     activeTab: location.hash === "#storage" ? "storage" : location.hash === "#logs" ? "logs" : "status",
     statusData: null,
     logs: [],
     storage: null,
-    logFilter: "all"
+    statusFilter: "all",
+    logFilter: "all",
+    inspectPath: ""
   };
 
   function setTab(tab) {
@@ -17,9 +33,12 @@
       btn.classList.toggle("active", btn.dataset.tab === tab);
     });
     $("pane-status").classList.toggle("hidden", tab !== "status");
+    $("spark-strip").classList.toggle("hidden", tab !== "status");
+    $("status-filter").classList.toggle("hidden", tab !== "status");
     $("pane-logs").classList.toggle("hidden", tab !== "logs");
     $("pane-storage").classList.toggle("hidden", tab !== "storage");
     $("log-filter").classList.toggle("hidden", tab !== "logs");
+    if (tab === "status") renderSparkline();
     if (tab === "logs") loadLogs();
     if (tab === "storage") loadStorage();
   }
@@ -66,13 +85,89 @@
     $("rt-size").textContent = formatBytes(totalSize);
   }
 
+  /* 近 50 次采样执行耗时与成败 Sparkline（跟随 8 套主题色） */
+  function renderSparkline() {
+    const canvas = $("spark-canvas");
+    const metaEl = $("spark-meta");
+    if (!canvas || !metaEl) return;
+    const logs = [...(state.statusData?.recent_logs || [])].slice(0, 50).reverse();
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    const width = Math.max(120, Math.floor(canvas.clientWidth || 300));
+    const height = Math.max(20, Math.floor(canvas.clientHeight || 24));
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+
+    const cs = getComputedStyle(document.documentElement);
+    const okColor = cs.getPropertyValue("--ok").trim() || "#16A34A";
+    const dangerColor = cs.getPropertyValue("--danger").trim() || "#DC2626";
+    const lineColor = cs.getPropertyValue("--border-color").trim() || "rgba(148,163,184,0.35)";
+
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, height - 1.5);
+    ctx.lineTo(width, height - 1.5);
+    ctx.stroke();
+
+    if (!logs.length) {
+      metaEl.textContent = t("empty.dash");
+      return;
+    }
+
+    const okCount = logs.filter((r) => r.status !== "error").length;
+    const avgMs = Math.round(logs.reduce((s, r) => s + Number(r.duration_ms || 0), 0) / logs.length);
+    const rate = Math.round((okCount / logs.length) * 100);
+    metaEl.textContent = t("rt.spark_rate", { rate, avg: avgMs });
+
+    const maxMs = Math.max(10, ...logs.map((r) => Number(r.duration_ms || 0)));
+    const slotW = width / Math.max(logs.length, 20);
+    const barW = Math.max(2, Math.min(10, slotW - 2));
+    const offsetX = width - logs.length * slotW;
+
+    logs.forEach((row, idx) => {
+      const ms = Math.max(1, Number(row.duration_ms || 0));
+      const h = Math.max(3, Math.round((ms / maxMs) * (height - 4)));
+      const x = offsetX + idx * slotW + (slotW - barW) / 2;
+      const y = height - 2 - h;
+      ctx.fillStyle = row.status === "error" ? dangerColor : okColor;
+      ctx.fillRect(x, y, barW, h);
+    });
+  }
+
+  function dataBarTd(value, maxVal, text, isWarn = false) {
+    const num = Number(value || 0);
+    const pct = maxVal > 0 && num > 0 ? Math.max(4, Math.min(100, Math.round((num / maxVal) * 100))) : 0;
+    const fillHtml = pct > 0 ? `<span class="data-bar-fill${isWarn ? " warn" : ""}" style="width:${pct}%"></span>` : "";
+    return `<td class="num data-bar-cell">${fillHtml}<span class="data-bar-text">${esc(text)}</span></td>`;
+  }
+
   function renderStatusTable() {
     const tbody = $("status-tbody");
-    const items = state.statusData?.items || [];
+    const rawItems = state.statusData?.items || [];
+    const filtered = rawItems.filter((item) => {
+      if (state.statusFilter === "error") return item.last_status === "error";
+      if (state.statusFilter === "auto") return item.enabled && item.interval_seconds > 0;
+      if (state.statusFilter === "manual") return item.interval_seconds === 0;
+      return true;
+    });
+    // 异常项自动置顶，同级保持原有顺序
+    const items = [...filtered].sort((a, b) => {
+      const ae = a.last_status === "error" ? 0 : 1;
+      const be = b.last_status === "error" ? 0 : 1;
+      return ae - be;
+    });
+
     if (!items.length) {
       tbody.innerHTML = `<tr><td colspan="12" class="empty-cell">${esc(t("empty.dash"))}</td></tr>`;
       return;
     }
+
+    const maxRows = Math.max(0, ...items.map((i) => Number(i.total_rows || 0)));
+    const maxSize = Math.max(0, ...items.map((i) => Number(i.result_size_bytes || 0)));
+    const maxMs = Math.max(0, ...items.map((i) => Number(i.last_duration_ms || 0)));
 
     tbody.innerHTML = items
       .map((item) => {
@@ -81,7 +176,8 @@
           : `<span class="badge muted">${esc(t("state.disabled"))}</span>`;
         const period = item.interval_seconds > 0 ? `${item.interval_seconds}${t("unit.sec")}` : t("state.manual");
         const years = item.result_years?.length ? item.result_years.join(", ") : t("empty.dash");
-        const itemBadge = item.item_count > 1 ? ` <span class="badge ok">${esc(t("def.item_count", { n: item.item_count }))}</span>` : "";
+        const itemBadge =
+          item.item_count > 1 ? ` <span class="badge ok">${esc(t("def.item_count", { n: item.item_count }))}</span>` : "";
 
         let msgHtml = `<span class="text-muted">${esc(t("state.idle"))}</span>`;
         if (item.last_status === "error") {
@@ -90,6 +186,11 @@
           msgHtml = `<span class="badge ok">${esc(t("state.ok"))}</span> <span class="mono">+${esc(item.last_rows_written ?? 0)}</span>`;
         }
 
+        const durText =
+          item.last_duration_ms !== null && item.last_duration_ms !== undefined
+            ? String(item.last_duration_ms)
+            : t("empty.dash");
+
         return `
           <tr>
             <td><strong>${esc(item.name)}</strong>${itemBadge}</td>
@@ -97,11 +198,11 @@
             <td class="num">${esc(period)}</td>
             <td class="mono">${esc(item.source_table)}</td>
             <td class="mono" title="${esc(item.target_preview || "")}">${esc(years)}</td>
-            <td class="num">${esc(item.total_rows ?? 0)}</td>
-            <td class="num">${esc(formatBytes(item.result_size_bytes))}</td>
+            ${dataBarTd(item.total_rows, maxRows, String(item.total_rows ?? 0))}
+            ${dataBarTd(item.result_size_bytes, maxSize, formatBytes(item.result_size_bytes))}
             <td class="num">${esc(formatTime(item.last_result_at, true))}</td>
             <td class="num">${esc(formatCountdown(item.next_run_at))}</td>
-            <td class="num">${item.last_duration_ms !== null && item.last_duration_ms !== undefined ? esc(item.last_duration_ms) : esc(t("empty.dash"))}</td>
+            ${dataBarTd(item.last_duration_ms, maxMs, durText, Number(item.last_duration_ms || 0) >= 500)}
             <td class="cell-ellipsis" title="${esc(item.last_error || "")}">${msgHtml}</td>
             <td class="sticky-actions">
               <div class="cell-actions">
@@ -125,7 +226,8 @@
     }
     tbody.innerHTML = logs
       .map((row) => {
-        const triggerKey = row.trigger === "auto" ? "rt.trigger_auto" : row.trigger === "batch" ? "rt.trigger_batch" : "rt.trigger_manual";
+        const triggerKey =
+          row.trigger === "auto" ? "rt.trigger_auto" : row.trigger === "batch" ? "rt.trigger_batch" : "rt.trigger_manual";
         const badge =
           row.status === "error"
             ? `<span class="badge danger">${esc(t("state.error"))}</span>`
@@ -151,6 +253,11 @@
       tbody.innerHTML = `<tr><td colspan="9" class="empty-cell">${esc(t("empty.dash"))}</td></tr>`;
       return;
     }
+
+    const defByName = new Map((state.statusData?.items || []).map((it) => [it.name, it.id]));
+    const maxRows = Math.max(0, ...items.map((d) => Number(d.row_count || 0)));
+    const maxSize = Math.max(0, ...items.map((d) => Number(d.size_bytes || 0)));
+
     tbody.innerHTML = items
       .map((db) => {
         const range =
@@ -164,23 +271,105 @@
           ? `<span class="badge warn">${esc(t("state.orphan"))}</span>`
           : `<span class="badge ok">${esc(t("state.active"))}</span>`;
         const dbPath = db.path || db.filename;
-        const tblBadge = db.table_count > 1 ? ` <span class="badge ok" title="${esc((db.tables || []).join(", "))}">${esc(db.table_count)}T</span>` : "";
+        const tblBadge =
+          db.table_count > 1
+            ? ` <span class="badge ok" title="${esc((db.tables || []).join(", "))}">${esc(db.table_count)}T</span>`
+            : "";
+        const linkedId = !db.is_orphan ? defByName.get(db.samp_name) : null;
+        const queryLink = linkedId
+          ? `<a class="btn xs icon-only" href="/query?id=${linkedId}&range=day" title="${esc(t("action.view_data"))}">${ICONS.chart}</a>`
+          : "";
         return `
           <tr>
             <td class="mono cell-ellipsis" title="${esc(dbPath)}">${esc(dbPath)}${tblBadge}</td>
             <td><strong>${esc(db.samp_name)}</strong></td>
             <td class="num">${esc(db.year ?? t("empty.dash"))}</td>
-            <td class="num">${esc(db.row_count)}</td>
-            <td class="num">${esc(formatBytes(db.size_bytes))}</td>
+            ${dataBarTd(db.row_count, maxRows, String(db.row_count))}
+            ${dataBarTd(db.size_bytes, maxSize, formatBytes(db.size_bytes))}
             <td class="mono">${esc(range)}</td>
             <td>${rtdbBadge}</td>
             <td>${linkBadge}</td>
             <td class="sticky-actions">
-              <button type="button" class="btn xs icon-only danger" data-del-db="${esc(dbPath)}" data-rows="${db.row_count}" data-size="${esc(formatBytes(db.size_bytes))}" title="${esc(t("action.delete"))}">${ICONS.trash}</button>
+              <div class="cell-actions">
+                <button type="button" class="btn xs icon-only" data-inspect-db="${esc(dbPath)}" title="${esc(t("action.inspect_db"))}">${ICONS.eye}</button>
+                <button type="button" class="btn xs icon-only" data-vacuum-db="${esc(dbPath)}" title="${esc(t("action.vacuum_db"))}">${ICONS.compress}</button>
+                ${queryLink}
+                <button type="button" class="btn xs icon-only danger" data-del-db="${esc(dbPath)}" data-rows="${db.row_count}" data-size="${esc(formatBytes(db.size_bytes))}" title="${esc(t("action.delete"))}">${ICONS.trash}</button>
+              </div>
             </td>
           </tr>`;
       })
       .join("");
+  }
+
+  async function openInspectDb(dbPath, tableName = "") {
+    state.inspectPath = dbPath;
+    try {
+      const params = new URLSearchParams({ path: dbPath, limit: "20" });
+      if (tableName) params.set("table", tableName);
+      const data = await api(`/api/storage/inspect?${params.toString()}`);
+
+      $("inspect-db-title").textContent = t("rt.inspect_title", { file: data.path || dbPath });
+      const totalRows = (data.tables || []).reduce((s, tb) => s + Number(tb.row_count || 0), 0);
+      $("inspect-db-meta").textContent = t("rt.inspect_meta", {
+        tables: (data.tables || []).length,
+        rows: totalRows,
+        size: formatBytes(data.size_bytes)
+      });
+
+      const tablesEl = $("inspect-db-tables");
+      tablesEl.innerHTML = (data.tables || [])
+        .map((tb) => {
+          const active = tb.name === data.active_table ? " active-chip" : "";
+          return `<button type="button" class="btn xs mono${active}" data-insp-table="${esc(tb.name)}">${esc(tb.name)} (${tb.row_count})</button>`;
+        })
+        .join("");
+
+      const activeMeta = (data.tables || []).find((tb) => tb.name === data.active_table);
+      $("inspect-db-cols").innerHTML = (activeMeta?.columns || [])
+        .map(
+          (col) =>
+            `<span class="field-pill mono" style="height:20px;font-size:11px;cursor:default">${esc(col.name)} <span class="field-type-tag">${esc(col.type || "TEXT")}</span></span>`
+        )
+        .join("");
+
+      const cols = data.columns || [];
+      const rows = data.rows || [];
+      if (!cols.length || !rows.length) {
+        $("inspect-db-wrap").innerHTML = `<div class="empty-cell">${esc(t("empty.dash"))}</div>`;
+      } else {
+        const thead = `<tr>${cols.map((c) => `<th class="mono">${esc(c)}</th>`).join("")}</tr>`;
+        const tbody = rows
+          .map(
+            (r) =>
+              `<tr>${cols
+                .map((c) => {
+                  const val = c === "sample_time" ? formatTime(r[c], true) : r[c] ?? "";
+                  return `<td class="mono">${esc(val)}</td>`;
+                })
+                .join("")}</tr>`
+          )
+          .join("");
+        $("inspect-db-wrap").innerHTML = `<table class="data-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table>`;
+      }
+      $("inspect-db-backdrop").classList.add("open");
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
+  async function vacuumStorageDb(dbPath) {
+    try {
+      const res = await api("/api/storage/vacuum", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: dbPath })
+      });
+      toast(t("rt.toast_vacuum", { file: res.path || dbPath, saved: formatBytes(res.saved_bytes || 0) }), "ok");
+      await Promise.all([loadStorage(), loadStatus()]);
+    } catch (err) {
+      toast(err.message, "error");
+    }
   }
 
   async function loadStatus() {
@@ -189,10 +378,14 @@
       state.statusData = data;
       syncAlarmsFromStatus(data);
       renderMetrics();
+      renderSparkline();
       renderStatusTable();
       if (state.activeTab === "logs" && state.logFilter === "all") {
         state.logs = data.recent_logs || [];
         renderLogsTable();
+      }
+      if (state.activeTab === "storage" && state.storage) {
+        renderStorageTable();
       }
     } catch (err) {
       toast(err.message, "error");
@@ -281,6 +474,10 @@
       location.hash = btn.dataset.tab === "status" ? "" : `#${btn.dataset.tab}`;
       setTab(btn.dataset.tab);
     });
+    $("status-filter").addEventListener("change", (e) => {
+      state.statusFilter = e.target.value;
+      renderStatusTable();
+    });
     $("log-filter").addEventListener("change", (e) => {
       state.logFilter = e.target.value;
       loadLogs();
@@ -299,12 +496,46 @@
       else if (btn.dataset.act === "toggle") toggleOne(id, btn.dataset.enabled === "1");
     });
     $("storage-tbody").addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-del-db]");
-      if (!btn) return;
-      deleteStorageDb(btn.dataset.delDb, btn.dataset.rows, btn.dataset.size);
+      const inspectBtn = e.target.closest("[data-inspect-db]");
+      if (inspectBtn) {
+        openInspectDb(inspectBtn.dataset.inspectDb);
+        return;
+      }
+      const vacuumBtn = e.target.closest("[data-vacuum-db]");
+      if (vacuumBtn) {
+        vacuumStorageDb(vacuumBtn.dataset.vacuumDb);
+        return;
+      }
+      const delBtn = e.target.closest("[data-del-db]");
+      if (delBtn) {
+        deleteStorageDb(delBtn.dataset.delDb, delBtn.dataset.rows, delBtn.dataset.size);
+      }
+    });
+    $("inspect-db-tables").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-insp-table]");
+      if (!btn || !state.inspectPath) return;
+      openInspectDb(state.inspectPath, btn.dataset.inspTable);
+    });
+    $("inspect-db-close").addEventListener("click", () => {
+      $("inspect-db-backdrop").classList.remove("open");
+    });
+    $("inspect-db-backdrop").addEventListener("click", (e) => {
+      if (e.target === $("inspect-db-backdrop")) $("inspect-db-backdrop").classList.remove("open");
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && $("inspect-db-backdrop").classList.contains("open")) {
+        $("inspect-db-backdrop").classList.remove("open");
+      }
+    });
+    window.addEventListener("resize", () => {
+      if (state.activeTab === "status") renderSparkline();
+    });
+    onThemeChange(() => {
+      if (state.activeTab === "status") renderSparkline();
     });
     onLangChange(() => {
       renderMetrics();
+      renderSparkline();
       renderStatusTable();
       renderLogsTable();
       renderStorageTable();

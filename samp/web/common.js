@@ -18,7 +18,22 @@ const ICONS = {
   play: '<svg class="ico ico-xs" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>',
   chart: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>',
   power: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg>',
-  trash: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
+  trash: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+  eye: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  compress: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>',
+  refresh: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
+  download: '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 20h16"/></svg>'
+};
+
+const THEME_SWATCHES = {
+  "minimalist-light": { key: "theme.light", bg: "#F8FAFC", accent: "#2563EB" },
+  "precision-dark": { key: "theme.dark", bg: "#0D1117", accent: "#58A6FF" },
+  "bento-grid": { key: "theme.bento", bg: "#F2F4F8", accent: "#0066FF" },
+  glassmorphism: { key: "theme.glass", bg: "#1E1B4B", accent: "#60A5FA" },
+  editorial: { key: "theme.editorial", bg: "#FAF8F5", accent: "#B45309" },
+  "sci-fi-cyan": { key: "theme.cyan", bg: "#040812", accent: "#00E5FF" },
+  "sci-fi-purple": { key: "theme.purple", bg: "#090614", accent: "#C084FC" },
+  "sci-fi-matrix": { key: "theme.matrix", bg: "#040D08", accent: "#00E676" }
 };
 
 /* ===================== 多语言引擎（i18n） ===================== */
@@ -81,6 +96,7 @@ function setLang(lang) {
   if (!SUPPORTED_LANGS.includes(lang)) return;
   localStorage.setItem(LANG_STORAGE_KEY, lang);
   applyI18nToDOM();
+  syncThemePickerUI();
   renderAlarmUI();
   _i18nListeners.forEach((fn) => fn(lang));
 }
@@ -89,7 +105,64 @@ function onLangChange(fn) {
   _i18nListeners.push(fn);
 }
 
-/* ===================== 5 主题风格预设引擎 ===================== */
+/* ===================== 8 主题风格预设与双色色卡引擎 ===================== */
+let _themePickerNodes = null;
+
+function _swatchDotsHtml(theme) {
+  const sw = THEME_SWATCHES[theme] || THEME_SWATCHES["minimalist-light"];
+  return `<span class="theme-dot-pair"><span class="theme-dot" style="background:${sw.bg}"></span><span class="theme-dot" style="background:${sw.accent}"></span></span>`;
+}
+
+function syncThemePickerUI() {
+  if (!_themePickerNodes) return;
+  const cur = getTheme();
+  const sw = THEME_SWATCHES[cur] || THEME_SWATCHES["minimalist-light"];
+  _themePickerNodes.btn.innerHTML = `${_swatchDotsHtml(cur)}<span class="theme-swatch-label">${esc(t(sw.key))}</span><span class="tree-caret">▾</span>`;
+  _themePickerNodes.btn.title = t("theme.toggle");
+  _themePickerNodes.menu.innerHTML = SUPPORTED_THEMES.map((id) => {
+    const meta = THEME_SWATCHES[id];
+    const active = id === cur ? " active" : "";
+    return `<button type="button" class="theme-opt${active}" data-theme-id="${id}">${_swatchDotsHtml(id)}<span>${esc(t(meta.key))}</span></button>`;
+  }).join("");
+}
+
+function initThemePicker(themeSelect) {
+  if (!themeSelect || _themePickerNodes) return;
+  const wrap = document.createElement("div");
+  wrap.className = "theme-picker";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.id = "theme-picker-btn";
+  btn.className = "theme-swatch-btn";
+  const menu = document.createElement("div");
+  menu.id = "theme-picker-menu";
+  menu.className = "theme-menu";
+
+  themeSelect.classList.add("hidden");
+  themeSelect.parentNode.insertBefore(wrap, themeSelect);
+  wrap.appendChild(btn);
+  wrap.appendChild(menu);
+  _themePickerNodes = { wrap, btn, menu };
+  syncThemePickerUI();
+
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    menu.classList.toggle("open");
+  });
+  menu.addEventListener("click", (event) => {
+    const opt = event.target.closest("[data-theme-id]");
+    if (!opt) return;
+    applyTheme(opt.dataset.themeId);
+    menu.classList.remove("open");
+  });
+  document.addEventListener("click", (event) => {
+    if (!wrap.contains(event.target)) menu.classList.remove("open");
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") menu.classList.remove("open");
+  });
+}
+
 function getTheme() {
   const saved = localStorage.getItem(THEME_STORAGE_KEY);
   return SUPPORTED_THEMES.includes(saved) ? saved : "minimalist-light";
@@ -101,6 +174,7 @@ function applyTheme(theme) {
   localStorage.setItem(THEME_STORAGE_KEY, target);
   const sel = $("theme-select");
   if (sel) sel.value = target;
+  syncThemePickerUI();
   _themeListeners.forEach((fn) => fn(target));
 }
 
@@ -322,10 +396,18 @@ function initSidebar() {
 function initChrome({ pollGlobalAlarms = true } = {}) {
   applyTheme(getTheme());
   initSidebar();
+  const topbar = document.querySelector(".topbar");
+  if (topbar && !$("top-progress")) {
+    const bar = document.createElement("div");
+    bar.id = "top-progress";
+    bar.className = "top-progress";
+    topbar.appendChild(bar);
+  }
   const themeSelect = $("theme-select");
   if (themeSelect) {
     themeSelect.value = getTheme();
     themeSelect.addEventListener("change", (event) => applyTheme(event.target.value));
+    initThemePicker(themeSelect);
   }
   const langSelect = $("lang-select");
   if (langSelect) {
@@ -340,26 +422,81 @@ function initChrome({ pollGlobalAlarms = true } = {}) {
       backdrop.classList.add("open");
     });
   }
+  // 全局 `/` 快捷键聚焦当前页面首个可见搜索框
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey) return;
+    const tag = (document.activeElement?.tagName || "").toUpperCase();
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (document.querySelector(".drawer-backdrop.open, .modal-backdrop.open")) return;
+    const target = [...document.querySelectorAll(".ctrl-search, input[type=search]")].find(
+      (el) => el.offsetParent !== null && !el.disabled
+    );
+    if (target) {
+      event.preventDefault();
+      target.focus();
+      target.select?.();
+    }
+  });
   applyI18nToDOM();
+  syncThemePickerUI();
   if (pollGlobalAlarms) {
     pollAlarms();
     setInterval(pollAlarms, 20000);
   }
 }
 
-/* ===================== HTTP 与反馈 ===================== */
+/* ===================== HTTP 与全局在途进度条 ===================== */
+let _inflight = 0;
+
+function _updateTopProgress() {
+  const bar = $("top-progress");
+  if (!bar) return;
+  bar.classList.toggle("active", _inflight > 0);
+}
+
 async function api(url, options = {}) {
-  const response = await fetch(url, options);
-  let body = {};
+  _inflight += 1;
+  _updateTopProgress();
   try {
-    body = await response.json();
-  } catch {
-    body = {};
+    const response = await fetch(url, options);
+    let body = {};
+    try {
+      body = await response.json();
+    } catch {
+      body = {};
+    }
+    if (!response.ok) {
+      throw new Error(body.detail || `HTTP ${response.status}`);
+    }
+    return body;
+  } finally {
+    _inflight = Math.max(0, _inflight - 1);
+    _updateTopProgress();
   }
-  if (!response.ok) {
-    throw new Error(body.detail || `HTTP ${response.status}`);
+}
+
+/* ===================== 轻量过滤条件客户端预检 ===================== */
+const _FILTER_CLAUSE_RE =
+  /^([A-Za-z_][A-Za-z0-9_]*)\s*(=|==|!=|<>|>=|<=|>|<|contains|not\s+contains|~)\s*(.+)$/i;
+
+function validateFilterExpr(expr) {
+  const text = String(expr || "").trim();
+  if (!text) return true;
+  // 按顶层 and / or 切分并检查每条原子子句格式
+  const parts = text.split(/\s+(?:and|or)\s+/i);
+  for (const raw of parts) {
+    const clause = raw.trim().replace(/^\(+/, "").replace(/\)+$/, "").trim();
+    if (!clause) return false;
+    if (!_FILTER_CLAUSE_RE.test(clause)) return false;
   }
-  return body;
+  // 检查括号配对
+  let depth = 0;
+  for (const ch of text) {
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth -= 1;
+    if (depth < 0) return false;
+  }
+  return depth === 0;
 }
 
 let _toastTimer = null;
@@ -509,6 +646,7 @@ window.SAMP = {
   syncAlarmsFromStatus,
   initChrome,
   api,
+  validateFilterExpr,
   toast,
   confirmModal,
   toLocalDateTimeInput,

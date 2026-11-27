@@ -203,6 +203,10 @@ class Store:
         self._synced_result_schemas: dict[tuple[str, str], dict[str, str]] = {}
         self._meta_cache_lock = threading.Lock()
         self._result_meta_cache: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
+        self._scan_cache_lock = threading.Lock()
+        self._dir_cache: tuple[float, list[str]] | None = None
+        self._source_db_cache: tuple[float, list[str]] | None = None
+        self._scan_ttl_seconds = 10.0
 
         self.initialize()
         self._sync_existing_results()
@@ -238,6 +242,8 @@ class Store:
             self._def_version += 1
             self._def_cache_key = None
             self._def_cache_rows = None
+        with self._scan_cache_lock:
+            self._source_db_cache = None
 
     def _definition_file_stamp(self) -> tuple[int, int, int]:
         try:
@@ -246,12 +252,23 @@ class Store:
         except OSError:
             return (self._def_version, 0, 0)
 
-    @staticmethod
+    _wal_initialized_dbs: set[str] = set()
+
+    @classmethod
     @contextmanager
-    def _connect(path: str | Path) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
+    def _connect(cls, path: str | Path) -> Iterator[sqlite3.Connection]:
+        db_str = str(path)
+        conn = sqlite3.connect(db_str, timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=5000")
+        try:
+            if db_str not in cls._wal_initialized_dbs:
+                conn.execute("PRAGMA journal_mode=WAL")
+                cls._wal_initialized_dbs.add(db_str)
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA temp_store=MEMORY")
+        except sqlite3.Error:
+            pass
         try:
             with conn:
                 yield conn
@@ -738,6 +755,13 @@ class Store:
                             cols = conn.execute(f"PRAGMA table_info({self._quote(new_table)})").fetchall()
                             sync_table(conn, dst_path, new_table, cols)
                 if src_path.resolve() != dst_path.resolve():
+                    # 迁移前刷盘 WAL 确保所有事务完整合入主库文件
+                    try:
+                        with self._connect(src_path) as ck_conn:
+                            ck_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                            ck_conn.execute("PRAGMA journal_mode=DELETE")
+                    except sqlite3.Error:
+                        pass
                     src_path.rename(dst_path)
                     for suffix in ("-wal", "-shm", "-journal"):
                         extra = Path(f"{src_path}{suffix}")
@@ -926,11 +950,16 @@ class Store:
         ]
         return {"version": 2, "exported_at": int(time.time()), "count": len(items), "items": items}
 
-    def list_directories(self, max_depth: int = 6) -> list[str]:
-        """扫描 root_dir 下所有多级目录（相对路径，含根目录 '.'），按层级字典序返回。"""
+    def list_directories(self, max_depth: int = 6, refresh: bool = False) -> list[str]:
+        """扫描 root_dir 下所有多级目录（相对路径，含根目录 '.'），带 10s 内存 TTL 缓存。"""
+        now = time.monotonic()
+        if not refresh:
+            with self._scan_cache_lock:
+                if self._dir_cache is not None and (now - self._dir_cache[0]) < self._scan_ttl_seconds:
+                    return list(self._dir_cache[1])
         dirs: list[str] = ["."]
         seen = {"."}
-        # 使用前序深度遍历保证父目录紧邻子目录，便于前端按层级展示
+
         def walk(current: Path, depth: int) -> None:
             if depth >= max_depth:
                 return
@@ -953,14 +982,16 @@ class Store:
 
         if self.root_dir.exists() and self.root_dir.is_dir():
             walk(self.root_dir, 0)
+        with self._scan_cache_lock:
+            self._dir_cache = (time.monotonic(), list(dirs))
         return dirs
 
-    def list_target_dirs(self) -> list[str]:
+    def list_target_dirs(self, refresh: bool = False) -> list[str]:
         """返回默认结果目录、root_dir 全部多级子目录与定义中已用过的目标目录（相对路径）。"""
         default_rel = self.to_relative_path(self.result_dir)
         dirs: list[str] = [default_rel]
         seen = {default_rel}
-        for rel in self.list_directories():
+        for rel in self.list_directories(refresh=refresh):
             if rel not in seen:
                 seen.add(rel)
                 dirs.append(rel)
@@ -1005,6 +1036,18 @@ class Store:
         if deleted:
             self._invalidate_definition_cache()
         return deleted
+
+    def delete_definitions_batch(self, samp_ids: Iterable[int]) -> int:
+        """批量删除采样定义（保留已有结果库文件）。"""
+        ids = list(dict.fromkeys(int(item) for item in samp_ids))
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        with self._db_lock(self.definition_db), self._connect(self.definition_db) as conn:
+            deleted = conn.execute(f"DELETE FROM samp_define WHERE id IN ({placeholders})", ids).rowcount
+        if deleted:
+            self._invalidate_definition_cache()
+        return int(deleted)
 
     def set_enabled(self, samp_id: int, enabled: bool) -> dict[str, Any] | None:
         with self._db_lock(self.definition_db), self._connect(self.definition_db) as conn:
@@ -1079,8 +1122,13 @@ class Store:
                         continue
                     stack.append((entry, depth + 1))
 
-    def list_source_databases(self) -> list[str]:
-        """扫描 root_dir 及允许目录下的可用源 SQLite 文件，统一返回相对路径。"""
+    def list_source_databases(self, refresh: bool = False) -> list[str]:
+        """扫描 root_dir 及允许目录下的可用源 SQLite 文件，统一返回相对路径，带 10s TTL 缓存。"""
+        now = time.monotonic()
+        if not refresh:
+            with self._scan_cache_lock:
+                if self._source_db_cache is not None and (now - self._source_db_cache[0]) < self._scan_ttl_seconds:
+                    return list(self._source_db_cache[1])
         candidates: list[str] = []
         seen: set[str] = set()
         def_path = Path(self.definition_db).expanduser().resolve()
@@ -1131,6 +1179,8 @@ class Store:
                         add_path(src)
                     except ValueError:
                         pass
+        with self._scan_cache_lock:
+            self._source_db_cache = (time.monotonic(), list(candidates))
         return candidates
 
     def source_tables(self, source_database: str | None = None) -> list[str]:
@@ -1399,8 +1449,8 @@ class Store:
         source_table: str,
         expression: str,
         fields: list[str],
-    ) -> tuple[list[tuple[str, dict[str, Any]]], dict[str, str]]:
-        """读取源表数据并同时返回每个采样字段的源列声明类型。"""
+    ) -> tuple[list[tuple[str, dict[str, Any]]], dict[str, str], list[str]]:
+        """单次只读连接完成字段解析（兼容 '*' 全表跟随）、过滤执行与源列声明类型采集。"""
         with self._connect_readonly(self._source_database(source_database)) as conn:
             table = self._source_table(source_table)
             info = conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -1408,13 +1458,27 @@ class Store:
             if not columns:
                 raise ValueError(f"源表不存在或没有字段: {source_database}:{source_table}")
             col_types = {str(row[1]): _normalize_sql_type(str(row[2])) for row in info}
+            if fields == ["*"]:
+                effective_fields: list[str] = []
+                seen_low: set[str] = set()
+                for col in columns:
+                    low = col.lower()
+                    if low in _RESULT_KEYS or not _IDENT.match(col) or low in seen_low:
+                        continue
+                    seen_low.add(low)
+                    effective_fields.append(col)
+                if not effective_fields:
+                    raise ValueError(f"源表没有可采样的业务字段: {source_database}:{source_table}")
+            else:
+                effective_fields = list(fields)
+
             where_sql, params, filter_fields = self._build_filter_sql(expression, col_types)
-            missing = [field for field in [*fields, *filter_fields] if field not in col_types]
+            missing = [field for field in [*effective_fields, *filter_fields] if field not in col_types]
             if missing:
                 raise ValueError(f"源表缺少字段: {', '.join(dict.fromkeys(missing))}")
             primary_keys = [str(row[1]) for row in sorted(info, key=lambda item: item[5]) if row[5]]
             key_columns = ["row_key"] if "row_key" in columns else primary_keys
-            selected = list(dict.fromkeys(fields))
+            selected = list(dict.fromkeys(effective_fields))
             for key_column in key_columns:
                 if key_column not in selected:
                     selected.append(key_column)
@@ -1427,11 +1491,11 @@ class Store:
         result: list[tuple[str, dict[str, Any]]] = []
         key_cols = key_columns or ["__samp_rowid"]
         for row in rows:
-            values = {field: row[field] for field in fields}
+            values = {field: row[field] for field in effective_fields}
             key = "|".join(str(row[column]) for column in key_cols)
             result.append((key, values))
-        field_types = {field: col_types[field] for field in fields}
-        return result, field_types
+        field_types = {field: col_types[field] for field in effective_fields}
+        return result, field_types, effective_fields
 
     def _raw_definition(self, samp_id: int) -> sqlite3.Row:
         with self._connect(self.definition_db) as conn:
@@ -1609,16 +1673,15 @@ class Store:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         db_key = os.path.normcase(str(db_path.resolve()))
 
-        # 先全部只读采样源数据，减少目标结果库写锁持有时长
+        # 先全部只读采样源数据（单次连接完成 '*' 列发现与读取），减少目标结果库写锁持有时长
         prepared: list[tuple[dict[str, Any], list[str], list[tuple[str, dict[str, Any]]], dict[str, str]]] = []
         for item in items:
             src_db = item["source_database"] or self.default_source_db
-            fields = self._resolve_source_fields(src_db, item["source_table"], list(item["fields"]))
-            rows, field_types = self._read_source(
+            rows, field_types, fields = self._read_source(
                 src_db,
                 item["source_table"],
                 item["filter"],
-                fields,
+                list(item["fields"]),
             )
             prepared.append((item, fields, rows, field_types))
 
@@ -1769,6 +1832,27 @@ class Store:
                     where_parts.append(f"row_key IN ({placeholders})")
                     params.extend(clean_keys)
                 where = " AND ".join(where_parts)
+                # 快速路径：当 offset==0 且本表未触发分页截断时，单次查询即可得到精确行数，免一次 COUNT(*)
+                if offset == 0 and len(rows) < limit:
+                    existing = {row[1].lower() for row in conn.execute(f"PRAGMA table_info({self._quote(table)})")}
+                    field_sql = ", ".join(
+                        f"{self._quote(field) if field.lower() in existing else 'NULL'} AS {self._quote(field)}"
+                        for field in selected
+                    )
+                    page_size = limit - len(rows)
+                    fetched = conn.execute(
+                        f"SELECT sample_time,row_key,{field_sql} FROM {self._quote(table)} "
+                        f"WHERE {where} ORDER BY sample_time {dir_sql}, row_key {dir_sql} LIMIT ?",
+                        [*params, page_size + 1],
+                    ).fetchall()
+                    if len(fetched) <= page_size:
+                        rows.extend(dict(row) for row in fetched)
+                        total_rows += len(fetched)
+                        continue
+                    rows.extend(dict(row) for row in fetched[:page_size])
+                    total_rows += int(conn.execute(f"SELECT COUNT(*) FROM {self._quote(table)} WHERE {where}", params).fetchone()[0])
+                    continue
+
                 count = int(conn.execute(f"SELECT COUNT(*) FROM {self._quote(table)} WHERE {where}", params).fetchone()[0])
                 total_rows += count
                 if offset >= count:
@@ -2309,23 +2393,130 @@ class Store:
         items.sort(key=lambda x: x["path"])
         return items
 
-    def delete_result_database(self, target_ref: str) -> bool:
-        """安全删除结果库（支持传默认目录文件名或相对根目录路径，严格限制仅允许删已登记结果库）。"""
+    def _resolve_known_result_db(self, target_ref: str) -> Path | None:
+        """解析并白名单校验已登记的结果库路径（兼容文件名与相对路径）。"""
         ref = str(target_ref or "").strip().replace("\\", "/")
         if not ref or ".." in Path(ref).parts or Path(ref).is_absolute():
             raise ValueError("非法的结果库路径")
-        known_by_rel = {item["path"]: self.resolve_path(item["path"]) for item in self.list_result_databases()}
+        all_dbs = self.list_result_databases()
+        known_by_rel = {item["path"]: self.resolve_path(item["path"]) for item in all_dbs}
         known_by_name: dict[str, Path] = {}
-        for item in self.list_result_databases():
+        for item in all_dbs:
             p = self.resolve_path(item["path"])
             if p.parent.resolve() == self.result_dir.resolve():
                 known_by_name[item["filename"]] = p
-
         target = known_by_rel.get(ref) or known_by_name.get(ref)
         if target is None:
-            # 对未命中但明显不合法的非结果库文件名显式报错（兼容旧测试断言 ValueError）
             if "/" not in ref and not _RESULT_FILE.fullmatch(ref):
                 raise ValueError("非法的结果库文件名")
+            return None
+        return target
+
+    def inspect_result_database(
+        self,
+        target_ref: str,
+        table: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """在线透视结果库内部全部业务表、列类型、RTDB 登记及最新样本行。"""
+        target = self._resolve_known_result_db(target_ref)
+        if target is None or not target.is_file():
+            raise KeyError("结果库文件不存在")
+        safe_limit = max(1, min(int(limit), 100))
+        tables_info: list[dict[str, Any]] = []
+        with self._connect_readonly(target) as conn:
+            rtdb_registered = (
+                conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='rtdb_schema_tables'").fetchone()
+                is not None
+            )
+            biz_tables = [
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                ).fetchall()
+                if str(r[0]).lower() not in REGISTRY_TABLES and _IDENT.match(str(r[0]))
+            ]
+            for tbl in biz_tables:
+                info = conn.execute(f"PRAGMA table_info({self._quote(tbl)})").fetchall()
+                cols = [{"name": str(r[1]), "type": _normalize_sql_type(str(r[2])), "pk": int(r[5])} for r in info]
+                col_names = [c["name"] for c in cols]
+                if "sample_time" in {c.lower() for c in col_names}:
+                    cnt, mn, mx = conn.execute(
+                        f"SELECT COUNT(*), MIN(sample_time), MAX(sample_time) FROM {self._quote(tbl)}"
+                    ).fetchone()
+                else:
+                    cnt = conn.execute(f"SELECT COUNT(*) FROM {self._quote(tbl)}").fetchone()[0]
+                    mn, mx = None, None
+                tables_info.append(
+                    {
+                        "name": tbl,
+                        "row_count": int(cnt or 0),
+                        "min_sample_time": int(mn) if mn is not None else None,
+                        "max_sample_time": int(mx) if mx is not None else None,
+                        "columns": cols,
+                    }
+                )
+            selected_table = table if (table and any(t["name"] == table for t in tables_info)) else (tables_info[0]["name"] if tables_info else "")
+            preview_columns: list[str] = []
+            preview_rows: list[dict[str, Any]] = []
+            if selected_table:
+                tbl_meta = next(t for t in tables_info if t["name"] == selected_table)
+                preview_columns = [c["name"] for c in tbl_meta["columns"]]
+                order_sql = "ORDER BY sample_time DESC, row_key ASC" if "sample_time" in {c.lower() for c in preview_columns} else ""
+                preview_rows = [
+                    dict(r)
+                    for r in conn.execute(
+                        f"SELECT * FROM {self._quote(selected_table)} {order_sql} LIMIT ?",
+                        (safe_limit,),
+                    ).fetchall()
+                ]
+        return {
+            "path": self.to_relative_path(target),
+            "filename": target.name,
+            "size_bytes": target.stat().st_size,
+            "rtdb_registered": rtdb_registered,
+            "tables": tables_info,
+            "selected_table": selected_table,
+            "columns": preview_columns,
+            "rows": preview_rows,
+        }
+
+    def vacuum_result_database(self, target_ref: str) -> dict[str, Any]:
+        """对指定结果库执行 WAL checkpoint + VACUUM 回收磁盘碎片空间。"""
+        target = self._resolve_known_result_db(target_ref)
+        if target is None or not target.is_file():
+            raise KeyError("结果库文件不存在")
+        db_key = os.path.normcase(str(target.resolve()))
+        with self._db_lock(target):
+            before = target.stat().st_size
+            wal_path = Path(f"{target}-wal")
+            if wal_path.exists():
+                before += wal_path.stat().st_size
+            conn = sqlite3.connect(str(target), timeout=30, isolation_level=None, check_same_thread=False)
+            try:
+                conn.execute("PRAGMA busy_timeout=5000")
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("VACUUM")
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                conn.close()
+            after = target.stat().st_size
+            if wal_path.exists():
+                after += wal_path.stat().st_size
+        with self._meta_cache_lock:
+            self._result_meta_cache.pop(db_key, None)
+        return {
+            "ok": True,
+            "path": self.to_relative_path(target),
+            "before_bytes": before,
+            "after_bytes": after,
+            "saved_bytes": max(0, before - after),
+        }
+
+    def delete_result_database(self, target_ref: str) -> bool:
+        """安全删除结果库（支持传默认目录文件名或相对根目录路径，严格限制仅允许删已登记结果库）。"""
+        target = self._resolve_known_result_db(target_ref)
+        if target is None:
             return False
 
         db_key = os.path.normcase(str(target.resolve()))

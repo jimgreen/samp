@@ -1,4 +1,4 @@
-/* 采样查询与多量纲交互式趋势曲线逻辑 */
+/* 采样查询与多量纲交互式趋势曲线逻辑（含宽表冻结列、表头排序、快照 Diff、参考线、导出 PNG 与 AbortController） */
 
 (function () {
   const {
@@ -26,14 +26,21 @@
     selectedKeys: new Set(),
     availableTimes: [],
     snapTime: "",
+    diffEnabled: false,
+    prevSnapRows: null, // Map<row_key, row>
     viewMode: "split",
+    autoSwitchedTable: false,
     keyKeyword: "",
+    rowKeyword: "",
+    sortCol: null,
+    sortDir: "asc",
     lastTable: null,
     lastSeries: null,
     pinnedIdx: null,
     page: 0,
     limit: 500,
     request: null,
+    abortCtrl: null,
     autoTimer: null,
     activeRange: "hour",
     chart: null
@@ -65,7 +72,10 @@
 
   function currentItem(def = currentDefinition()) {
     if (!def) return null;
-    const items = def.items && def.items.length ? def.items : [{ item_id: "i1", source_table: def.source_table, target_table: "", fields: def.fields || [] }];
+    const items =
+      def.items && def.items.length
+        ? def.items
+        : [{ item_id: "i1", source_table: def.source_table, target_table: "", fields: def.fields || [] }];
     const val = $("q-item").value;
     return items.find((it) => it.item_id === val) || items[0];
   }
@@ -86,6 +96,20 @@
       {},
       $("q-field-search") ? $("q-field-search").value : ""
     );
+  }
+
+  function applySmartDefaultView() {
+    const hasNumeric = (state.itemSchema.numeric_fields || []).length > 0;
+    if (!hasNumeric && (state.itemSchema.fields || []).length > 0) {
+      if (state.viewMode !== "table") {
+        state.autoSwitchedTable = true;
+        setViewMode("table");
+        toast(t("q.auto_table_hint"), "info");
+      }
+    } else if (hasNumeric && state.autoSwitchedTable) {
+      state.autoSwitchedTable = false;
+      setViewMode("split");
+    }
   }
 
   async function loadItemSchema(def, item, preserveChecked = false) {
@@ -110,6 +134,30 @@
     }
     const preset = prevChecked && prevChecked.length ? prevChecked : state.itemSchema.fields;
     renderQueryFields(preset);
+    if (!preserveChecked) applySmartDefaultView();
+  }
+
+  function getPrevSnapTime() {
+    if (!state.snapTime || !state.availableTimes.length) return null;
+    const idx = state.availableTimes.indexOf(Number(state.snapTime));
+    if (idx < 0 || idx + 1 >= state.availableTimes.length) return null;
+    return state.availableTimes[idx + 1];
+  }
+
+  function syncDiffControls() {
+    const prevTs = getPrevSnapTime();
+    const cb = $("q-diff-prev");
+    const wrap = $("q-diff-wrap");
+    const badge = $("q-diff-badge");
+    const available = prevTs !== null;
+    cb.disabled = !available;
+    wrap.classList.toggle("disabled", !available);
+    if (!available) {
+      cb.checked = false;
+      state.diffEnabled = false;
+      state.prevSnapRows = null;
+      badge.classList.add("hidden");
+    }
   }
 
   function renderSnapTimes() {
@@ -127,6 +175,7 @@
       state.snapTime = "";
       sel.value = "";
     }
+    syncDiffControls();
   }
 
   function setViewMode(mode) {
@@ -152,7 +201,10 @@
       await loadItemSchema(null, null, false);
       return;
     }
-    const items = def.items && def.items.length ? def.items : [{ item_id: "i1", source_table: def.source_table, target_table: "", fields: def.fields || [] }];
+    const items =
+      def.items && def.items.length
+        ? def.items
+        : [{ item_id: "i1", source_table: def.source_table, target_table: "", fields: def.fields || [] }];
     const prev = targetItemId ?? itemSel.value;
     itemSel.innerHTML = items
       .map((it) => {
@@ -170,11 +222,8 @@
   async function renderDefinitionSelect(targetId = null, targetItemId = null) {
     const select = $("q-def");
     const prev = targetId ?? select.value;
-    select.innerHTML = state.definitions
-      .map((d) => `<option value="${d.id}">${esc(d.samp_name)}</option>`)
-      .join("");
-    const chosen =
-      state.definitions.find((d) => String(d.id) === String(prev)) || state.definitions[0];
+    select.innerHTML = state.definitions.map((d) => `<option value="${d.id}">${esc(d.samp_name)}</option>`).join("");
+    const chosen = state.definitions.find((d) => String(d.id) === String(prev)) || state.definitions[0];
     if (chosen) {
       select.value = String(chosen.id);
       await renderItemSelect(chosen, targetItemId, false);
@@ -295,36 +344,98 @@
     }
   }
 
+  function valuesDiffer(a, b) {
+    if (a === b) return false;
+    if ((a === null || a === undefined || a === "") && (b === null || b === undefined || b === "")) return false;
+    const na = Number(a);
+    const nb = Number(b);
+    if (a !== "" && b !== "" && Number.isFinite(na) && Number.isFinite(nb)) {
+      return Math.abs(na - nb) > 1e-9;
+    }
+    return String(a ?? "") !== String(b ?? "");
+  }
+
   function renderTable(result) {
     const cols = result?.columns || [];
-    const rows = result?.rows || [];
+    const rawRows = result?.rows || [];
+    const kw = state.rowKeyword.trim().toLowerCase();
+
+    // 表内关键词过滤
+    let displayRows = kw
+      ? rawRows.filter((r) => cols.some((c) => String(r[c] ?? "").toLowerCase().includes(kw)))
+      : [...rawRows];
+
+    // 表头列排序
+    if (state.sortCol && cols.includes(state.sortCol)) {
+      const col = state.sortCol;
+      const dir = state.sortDir === "desc" ? -1 : 1;
+      displayRows.sort((a, b) => {
+        const va = a[col];
+        const vb = b[col];
+        if (va === vb) return 0;
+        if (va === null || va === undefined || va === "") return 1;
+        if (vb === null || vb === undefined || vb === "") return -1;
+        const na = Number(va);
+        const nb = Number(vb);
+        if (Number.isFinite(na) && Number.isFinite(nb)) return (na - nb) * dir;
+        return String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: "base" }) * dir;
+      });
+    }
+
     $("q-thead").innerHTML = cols.length
       ? `<tr>${cols
           .map((c) => {
             const label = c === "sample_time" ? t("col.sample_time") : c === "row_key" ? t("col.row_key") : c;
-            const cls = c === "row_key" ? "" : "num";
-            return `<th class="${cls}">${esc(label)}</th>`;
+            const classes = ["sortable-th"];
+            if (c === "sample_time") classes.push("num", "freeze-1");
+            else if (c === "row_key") classes.push("freeze-2");
+            else classes.push("num");
+            const ind = state.sortCol === c ? `<span class="sort-ind">${state.sortDir === "asc" ? "▲" : "▼"}</span>` : "";
+            return `<th class="${classes.join(" ")}" data-sort-col="${esc(c)}">${esc(label)}${ind}</th>`;
           })
           .join("")}</tr>`
       : "";
 
-    if (!rows.length) {
+    const prevMap = state.diffEnabled && state.prevSnapRows ? state.prevSnapRows : null;
+    let diffCount = 0;
+
+    if (!displayRows.length) {
       $("q-tbody").innerHTML = `<tr><td colspan="${Math.max(1, cols.length)}" class="empty-cell">${esc(t("empty.dash"))}</td></tr>`;
     } else {
-      $("q-tbody").innerHTML = rows
-        .map(
-          (row, idx) =>
-            `<tr data-idx="${idx}" data-ts="${row.sample_time}" class="${state.pinnedIdx === idx ? "selected" : ""}">${cols
-              .map((c) => {
-                if (c === "sample_time") return `<td class="num">${esc(formatTime(row[c]))}</td>`;
-                if (c === "row_key") return `<td class="mono">${esc(row[c])}</td>`;
-                const val = row[c];
-                const isNum = typeof val === "number" || (val !== null && val !== "" && Number.isFinite(Number(val)));
-                return `<td class="${isNum ? "num" : ""}">${esc(isNum ? formatNumber(val) : val ?? t("empty.dash"))}</td>`;
-              })
-              .join("")}</tr>`
-        )
+      $("q-tbody").innerHTML = displayRows
+        .map((row, idx) => {
+          const prevRow = prevMap ? prevMap.get(String(row.row_key ?? "")) : null;
+          return `<tr data-idx="${idx}" data-ts="${row.sample_time}" class="${state.pinnedIdx === idx ? "selected" : ""}">${cols
+            .map((c) => {
+              if (c === "sample_time") return `<td class="num freeze-1">${esc(formatTime(row[c]))}</td>`;
+              if (c === "row_key") return `<td class="mono freeze-2" title="${esc(row[c])}">${esc(row[c])}</td>`;
+              const val = row[c];
+              const isNum = typeof val === "number" || (val !== null && val !== "" && Number.isFinite(Number(val)));
+              const text = isNum ? formatNumber(val) : val ?? t("empty.dash");
+              let diffCls = "";
+              let titleAttr = "";
+              if (prevMap) {
+                const prevVal = prevRow ? prevRow[c] : undefined;
+                if (!prevRow || valuesDiffer(val, prevVal)) {
+                  diffCls = " cell-diff";
+                  diffCount += 1;
+                  const prevDisp = prevRow ? (prevVal ?? t("empty.dash")) : "NEW";
+                  titleAttr = ` title="${esc(`${prevDisp} → ${text}`)}"`;
+                }
+              }
+              return `<td class="${isNum ? "num" : ""}${diffCls}"${titleAttr}>${esc(text)}</td>`;
+            })
+            .join("")}</tr>`;
+        })
         .join("");
+    }
+
+    const badge = $("q-diff-badge");
+    if (prevMap) {
+      badge.textContent = t("q.diff_changed", { n: diffCount });
+      badge.classList.remove("hidden");
+    } else {
+      badge.classList.add("hidden");
     }
 
     const total = Number(result?.total_rows || 0);
@@ -333,7 +444,7 @@
     const page = total ? Math.floor(offset / limit) + 1 : 0;
     const pages = total ? Math.ceil(total / limit) : 0;
     $("q-page-info").textContent = total
-      ? t("q.page_info", { page, pages, from: offset + 1, to: Math.min(offset + rows.length, total), total })
+      ? t("q.page_info", { page, pages, from: offset + 1, to: Math.min(offset + rawRows.length, total), total })
       : t("empty.dash");
     $("q-prev").disabled = page <= 1;
     $("q-next").disabled = !total || page >= pages;
@@ -342,6 +453,11 @@
   async function runQuery(page = 0, useSaved = false, refreshSeries = true) {
     const req = useSaved ? state.request : buildRequest();
     if (!req) return;
+    if (state.abortCtrl) state.abortCtrl.abort();
+    const ctrl = new AbortController();
+    state.abortCtrl = ctrl;
+    const fetchOpts = { signal: ctrl.signal };
+
     state.page = Math.max(0, page);
     state.pinnedIdx = null;
     if (!useSaved) state.request = req;
@@ -359,8 +475,28 @@
     if (req.itemId) params.set("item_id", req.itemId);
     if (req.rowKeys.length) params.set("row_keys", req.rowKeys.join(","));
 
+    const prevSnapTs = state.diffEnabled && req.snapTime !== null ? getPrevSnapTime() : null;
+
     try {
-      const jobs = [api(`/api/query/${req.id}?${params.toString()}`)];
+      const tableJob = api(`/api/query/${req.id}?${params.toString()}`, fetchOpts);
+      let prevSnapJob = Promise.resolve(null);
+      if (prevSnapTs !== null) {
+        const pParams = new URLSearchParams({
+          start: String(prevSnapTs),
+          end: String(prevSnapTs),
+          fields: req.fields.join(","),
+          order: req.order,
+          limit: String(state.limit),
+          offset: "0"
+        });
+        if (req.itemId) pParams.set("item_id", req.itemId);
+        if (req.rowKeys.length) pParams.set("row_keys", req.rowKeys.join(","));
+        prevSnapJob = api(`/api/query/${req.id}?${pParams.toString()}`, fetchOpts);
+      }
+
+      let seriesJob = Promise.resolve(null);
+      let keysJob = Promise.resolve(null);
+      let timesJob = Promise.resolve(null);
       if (refreshSeries) {
         const sParams = new URLSearchParams({
           start: String(req.start),
@@ -372,11 +508,22 @@
         if (req.rowKeys.length) sParams.set("row_keys", req.rowKeys.join(","));
         const kParams = new URLSearchParams({ start: String(req.start), end: String(req.end) });
         if (req.itemId) kParams.set("item_id", req.itemId);
-        jobs.push(api(`/api/query/${req.id}/series?${sParams.toString()}`));
-        jobs.push(api(`/api/query/${req.id}/keys?${kParams.toString()}`));
-        jobs.push(api(`/api/query/${req.id}/times?${kParams.toString()}`));
+        seriesJob = api(`/api/query/${req.id}/series?${sParams.toString()}`, fetchOpts);
+        keysJob = api(`/api/query/${req.id}/keys?${kParams.toString()}`, fetchOpts);
+        timesJob = api(`/api/query/${req.id}/times?${kParams.toString()}`, fetchOpts);
       }
-      const [tableRes, seriesRes, keysRes, timesRes] = await Promise.all(jobs);
+
+      const [tableRes, prevRes, seriesRes, keysRes, timesRes] = await Promise.all([
+        tableJob,
+        prevSnapJob,
+        seriesJob,
+        keysJob,
+        timesJob
+      ]);
+
+      if (ctrl.signal.aborted) return;
+
+      state.prevSnapRows = prevRes ? new Map((prevRes.rows || []).map((r) => [String(r.row_key ?? ""), r])) : null;
       state.lastTable = tableRes;
       renderTable(tableRes);
       const wildTag = state.itemSchema.is_wildcard ? ` · ${t("def.all_fields_wild")}` : "";
@@ -406,6 +553,7 @@
         renderSnapTimes();
       }
     } catch (err) {
+      if (err?.name === "AbortError") return;
       toast(err.message, "error");
     }
   }
@@ -449,6 +597,17 @@
     $("btn-query").addEventListener("click", () => runQuery(0, false, true));
     $("btn-export").addEventListener("click", exportCsv);
     $("btn-reset-zoom").addEventListener("click", () => state.chart?.resetZoom());
+    $("btn-export-png").addEventListener("click", () => {
+      const def = currentDefinition();
+      const fname = `${def ? def.samp_name : "samp"}_trend.png`;
+      state.chart?.exportPng(fname);
+    });
+
+    const syncThresholds = () => {
+      state.chart?.setThresholds({ low: $("q-ref-low").value, high: $("q-ref-high").value });
+    };
+    $("q-ref-low").addEventListener("input", syncThresholds);
+    $("q-ref-high").addEventListener("input", syncThresholds);
 
     // 曲线视图模式切换（同轴 / 归一化 / 分轨）
     $("chart-modes").addEventListener("click", (e) => {
@@ -488,6 +647,29 @@
       runQuery(0, false, true);
     });
 
+    // 表头点击排序
+    $("q-thead").addEventListener("click", (e) => {
+      const th = e.target.closest("th[data-sort-col]");
+      if (!th) return;
+      const col = th.dataset.sortCol;
+      if (state.sortCol !== col) {
+        state.sortCol = col;
+        state.sortDir = "asc";
+      } else if (state.sortDir === "asc") {
+        state.sortDir = "desc";
+      } else {
+        state.sortCol = null;
+        state.sortDir = "asc";
+      }
+      if (state.lastTable) renderTable(state.lastTable);
+    });
+
+    // 表内行搜索
+    $("q-row-search").addEventListener("input", (e) => {
+      state.rowKeyword = e.target.value;
+      if (state.lastTable) renderTable(state.lastTable);
+    });
+
     // 表格点击行 -> 图表高亮对应时刻竖线
     $("q-tbody").addEventListener("click", (e) => {
       const tr = e.target.closest("tr[data-ts]");
@@ -512,11 +694,18 @@
       setTimeRange(btn.dataset.range);
       runQuery(0, false, true);
     });
-    $("q-start").addEventListener("change", () => { state.activeRange = null; });
-    $("q-end").addEventListener("change", () => { state.activeRange = null; });
+    $("q-start").addEventListener("change", () => {
+      state.activeRange = null;
+    });
+    $("q-end").addEventListener("change", () => {
+      state.activeRange = null;
+    });
 
     $("q-def").addEventListener("change", async () => {
       state.snapTime = "";
+      state.diffEnabled = false;
+      state.prevSnapRows = null;
+      state.sortCol = null;
       state.availableTimes = [];
       renderSnapTimes();
       await renderItemSelect(currentDefinition(), null, false);
@@ -528,6 +717,9 @@
     });
     $("q-item").addEventListener("change", async () => {
       state.snapTime = "";
+      state.diffEnabled = false;
+      state.prevSnapRows = null;
+      state.sortCol = null;
       state.availableTimes = [];
       renderSnapTimes();
       await loadItemSchema(currentDefinition(), currentItem(), false);
@@ -539,12 +731,19 @@
     });
     $("q-snap-time").addEventListener("change", (e) => {
       state.snapTime = e.target.value;
+      syncDiffControls();
       state.page = 0;
+      runQuery(0, false, false);
+    });
+    $("q-diff-prev").addEventListener("change", (e) => {
+      state.diffEnabled = e.target.checked;
+      if (!state.diffEnabled) state.prevSnapRows = null;
       runQuery(0, false, false);
     });
     $("q-view-modes").addEventListener("click", (e) => {
       const btn = e.target.closest("[data-view]");
       if (!btn) return;
+      state.autoSwitchedTable = false;
       setViewMode(btn.dataset.view);
     });
     $("q-agg").addEventListener("change", () => runQuery(0, false, true));

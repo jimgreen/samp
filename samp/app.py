@@ -55,6 +55,14 @@ class BatchEnableIn(BaseModel):
     enabled: bool
 
 
+class BatchIdsIn(BaseModel):
+    ids: list[int] = Field(min_length=1)
+
+
+class StoragePathIn(BaseModel):
+    path: str = Field(min_length=1)
+
+
 class TableSampleEntryIn(BaseModel):
     source_table: str
     name: str = ""
@@ -121,7 +129,7 @@ def create_app(
     app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
     @app.get("/api/config")
-    def config():
+    def config(refresh: bool = False):
         return {
             "root_dir": store.root_dir.as_posix(),
             "default_source_db": store.to_relative_path(store.default_source_db),
@@ -129,9 +137,9 @@ def create_app(
             "scheduler_enabled": bool(enable_scheduler),
             "align": bool(align),
             "workers": int(workers),
-            "directories": store.list_directories(),
-            "source_databases": store.list_source_databases(),
-            "target_dirs": store.list_target_dirs(),
+            "directories": store.list_directories(refresh=refresh),
+            "source_databases": store.list_source_databases(refresh=refresh),
+            "target_dirs": store.list_target_dirs(refresh=refresh),
         }
 
     @app.get("/api/definitions")
@@ -211,12 +219,32 @@ def create_app(
         updated = store.set_enabled_batch(payload.ids, payload.enabled)
         return {"updated": updated, "enabled": payload.enabled}
 
+    @app.post("/api/definitions/batch-delete")
+    def batch_delete_definitions(payload: BatchIdsIn):
+        deleted = store.delete_definitions_batch(payload.ids)
+        return {"deleted": deleted}
+
     @app.post("/api/definitions/{samp_id}/enable")
     def enable_definition(samp_id: int, enabled: bool = True):
         value = store.set_enabled(samp_id, enabled)
         if not value:
             raise HTTPException(404, "采样定义不存在")
         return value
+
+    @app.post("/api/sample/batch")
+    async def sample_batch(payload: BatchIdsIn):
+        unique_ids = list(dict.fromkeys(int(i) for i in payload.ids))
+        results = await asyncio.gather(
+            *(execute_sample(sid, trigger="batch") for sid in unique_ids),
+            return_exceptions=True,
+        )
+        completed, failed = [], []
+        for sid, result in zip(unique_ids, results):
+            if isinstance(result, Exception):
+                failed.append({"id": sid, "error": str(result)})
+            else:
+                completed.append(result)
+        return {"requested": len(unique_ids), "completed": completed, "failed": failed}
 
     @app.post("/api/sample/all")
     async def sample_all():
@@ -518,11 +546,11 @@ def create_app(
             raise HTTPException(400, str(exc))
 
     @app.get("/api/source/databases")
-    def source_databases():
+    def source_databases(refresh: bool = False):
         return {
             "root_dir": store.root_dir.as_posix(),
-            "directories": store.list_directories(),
-            "databases": store.list_source_databases(),
+            "directories": store.list_directories(refresh=refresh),
+            "databases": store.list_source_databases(refresh=refresh),
             "default": store.to_relative_path(store.default_source_db),
         }
 
@@ -572,6 +600,32 @@ def create_app(
             "total_size_bytes": sum(item["size_bytes"] for item in items),
             "items": items,
         }
+
+    @app.get("/api/storage/inspect")
+    def inspect_storage_database(
+        path: str = Query(...),
+        table: str = "",
+        limit: int = Query(20, ge=1, le=200),
+    ):
+        try:
+            return store.inspect_result_database(path, table or None, limit)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc))
+        except sqlite3.Error as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/storage/vacuum")
+    def vacuum_storage_database(payload: StoragePathIn):
+        try:
+            return store.vacuum_result_database(payload.path)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc))
+        except sqlite3.Error as exc:
+            raise HTTPException(400, str(exc))
 
     @app.delete("/api/storage/databases/{filename:path}")
     def delete_storage_database(filename: str):

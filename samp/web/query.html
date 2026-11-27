@@ -102,6 +102,11 @@
           <select id="q-snap-time" class="select-ctrl mono" style="max-width:162px">
             <option value="" data-i18n="q.all_times">全部时刻</option>
           </select>
+          <label class="diff-chip disabled" id="q-diff-wrap">
+            <input type="checkbox" id="q-diff-prev" disabled>
+            <span data-i18n="q.diff_prev">对比上一时刻</span>
+          </label>
+          <span class="badge warn hidden" id="q-diff-badge"></span>
           <div class="tabs" id="q-view-modes">
             <button type="button" class="tab-btn active" data-view="split" data-i18n="q.view_split">图+表</button>
             <button type="button" class="tab-btn" data-view="table" data-i18n="q.view_table">仅整表</button>
@@ -152,11 +157,14 @@
           <div class="chart-legend" id="chart-legend"></div>
           <div class="toolbar-group">
             <span class="mono text-muted" id="chart-meta"></span>
+            <input id="q-ref-low" type="number" step="any" class="ctrl ref-input" data-i18n-placeholder="q.ref_low" placeholder="下限">
+            <input id="q-ref-high" type="number" step="any" class="ctrl ref-input" data-i18n-placeholder="q.ref_high" placeholder="上限">
             <div class="tabs" id="chart-modes">
               <button type="button" class="tab-btn active" data-mode="shared" data-i18n="q.mode_shared">同轴</button>
               <button type="button" class="tab-btn" data-mode="normalized" data-i18n="q.mode_norm">归一化</button>
               <button type="button" class="tab-btn" data-mode="stacked" data-i18n="q.mode_stacked">分轨</button>
             </div>
+            <button type="button" id="btn-export-png" class="btn xs" data-i18n="action.export_png">导出 PNG</button>
             <button type="button" id="btn-reset-zoom" class="btn xs" data-i18n="action.reset_zoom">重置缩放</button>
           </div>
         </div>
@@ -175,6 +183,7 @@
         </div>
         <div class="pager-bar">
           <div class="toolbar-group">
+            <input id="q-row-search" type="search" class="ctrl ctrl-sm ctrl-search" style="width:140px" data-i18n-placeholder="q.search_rows" placeholder="筛选行">
             <select id="q-limit" class="select-ctrl ctrl-sm">
               <option value="100">100</option>
               <option value="500" selected>500</option>

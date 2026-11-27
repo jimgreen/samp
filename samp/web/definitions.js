@@ -1,7 +1,23 @@
 /* 采样定义工作台：极速单点级联建点 + 可视化过滤构造器 + 整库批量建点向导 + 单元格无缝内嵌编辑 */
 
 (function () {
-  const { $, esc, t, ICONS, api, toast, confirmModal, checkedFields, setAllFields, renderFieldChecks, initChrome, onLangChange } = window.SAMP;
+  const {
+    $,
+    esc,
+    t,
+    ICONS,
+    api,
+    validateFilterExpr,
+    toast,
+    confirmModal,
+    formatTime,
+    checkedFields,
+    setAllFields,
+    renderFieldChecks,
+    syncAlarmsFromStatus,
+    initChrome,
+    onLangChange
+  } = window.SAMP;
 
   const IDENT_RE = /^[A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*$/;
   const CUSTOM_VAL = "__custom__";
@@ -10,6 +26,7 @@
   const state = {
     config: { default_source_db: "", source_databases: [], directories: ["."], target_dirs: [], sqlite_dir: "samp" },
     definitions: [],
+    runtimeById: new Map(),
     health: null,
     selectedIds: new Set(),
     editingOriginal: null, // { name, target_dir, target_name }
@@ -20,10 +37,6 @@
     activeItemIdx: 0,
     keyword: "",
     statusFilter: "all",
-    // 批量建点向导状态
-    bwTables: [],
-    bwSelected: new Set(),
-    bwOverrides: {}, // table -> { name, interval }
     // 整表采样双栏工作台状态
     ts: {
       tables: [],
@@ -114,6 +127,8 @@
     const count = state.selectedIds.size;
     $("batch-enable").classList.toggle("hidden", count === 0);
     $("batch-disable").classList.toggle("hidden", count === 0);
+    $("batch-sample").classList.toggle("hidden", count === 0);
+    $("batch-delete").classList.toggle("hidden", count === 0);
   }
 
   function renderMetrics() {
@@ -170,7 +185,7 @@
     const checkAll = $("check-all");
 
     if (!rows.length) {
-      tbody.innerHTML = `<tr><td colspan="10" class="empty-cell">${esc(t("empty.dash"))}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="11" class="empty-cell">${esc(t("empty.dash"))}</td></tr>`;
       checkAll.checked = false;
       return;
     }
@@ -183,6 +198,18 @@
         const badge = d.enabled
           ? `<span class="badge ok">${esc(t("state.enabled"))}</span>`
           : `<span class="badge muted">${esc(t("state.disabled"))}</span>`;
+        const rt = state.runtimeById.get(d.id);
+        let lastHtml = `<span class="text-muted">${esc(t("empty.dash"))}</span>`;
+        if (rt && rt.last_status === "error") {
+          lastHtml = `<a href="/runtime#logs" class="badge danger" style="text-decoration:none" title="${esc(rt.last_error || "")}">${esc(t("state.error"))}</a>`;
+        } else if (rt && (rt.last_status === "ok" || rt.last_result_at)) {
+          const tsText = rt.last_result_at ? formatTime(rt.last_result_at, true) : formatTime(rt.last_run_at, true);
+          const rowsTag =
+            rt.last_rows_written !== null && rt.last_rows_written !== undefined
+              ? ` <span class="badge ok">+${esc(rt.last_rows_written)}</span>`
+              : "";
+          lastHtml = `<span class="mono" style="font-size:11px" title="${esc(tsText)}">${esc(tsText)}</span>${rowsTag}`;
+        }
         const items = d.items && d.items.length ? d.items : [{ source_table: d.source_table, fields: d.fields || [] }];
         const itemBadge =
           items.length > 1
@@ -218,6 +245,7 @@
               <input type="text" class="filter-in inline-filter" data-id="${d.id}" value="${esc(d.filter || "")}" placeholder="${esc(t("empty.dash"))}" title="${esc(d.filter || t("def.label_filter"))}">
             </td>
             <td>${badge}</td>
+            <td>${lastHtml}</td>
             <td class="sticky-actions">
               <div class="cell-actions">
                 <button type="button" class="btn xs icon-only" data-act="edit" data-id="${d.id}" title="${esc(t("action.edit"))}">${ICONS.edit}</button>
@@ -291,9 +319,36 @@
   const openDirTrees = new Set();
   let targetDirTree = null;
   let sourceDirTree = null;
-  let bwTargetDirTree = null;
   let tsSourceDirTree = null;
   let tsTargetDirTree = null;
+
+  async function refreshDirectoriesFromServer() {
+    try {
+      state.config = await api("/api/config?refresh=1");
+      renderMetrics();
+      const allDbs = state.config.source_databases || [];
+      const dirs = collectedDirs();
+      const countByDir = new Map();
+      allDbs.forEach((p) => {
+        if (/^[a-zA-Z]:/.test(p) || p.startsWith("/")) return;
+        const d = dirOf(p);
+        countByDir.set(d, (countByDir.get(d) || 0) + 1);
+      });
+      const defDir = state.config.sqlite_dir || "samp";
+      targetDirTree?.setData(dirs, new Map(), 0, defDir);
+      tsTargetDirTree?.setData(dirs, new Map(), 0, defDir);
+      sourceDirTree?.setData(dirs, countByDir, allDbs.length, defDir);
+      tsSourceDirTree?.setData(dirs, countByDir, allDbs.length, defDir);
+      if ($("drawer-backdrop").classList.contains("open")) {
+        renderSourceDbForDir(sourceDirTree.getValue(), currentSourceDb());
+      }
+      if ($("ts-backdrop").classList.contains("open")) {
+        tsRenderSourceDbForDir(tsSourceDirTree.getValue(), $("ts-source-db").value);
+      }
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
 
   function closeAllDirTrees(except = null) {
     [...openDirTrees].forEach((picker) => {
@@ -365,6 +420,7 @@
         <input type="text" class="ctrl mono tree-search" autocomplete="off">
         <button type="button" class="btn xs tree-expand-all"></button>
         <button type="button" class="btn xs tree-collapse-all"></button>
+        <button type="button" class="btn xs icon-only tree-refresh-dirs">${ICONS.refresh}</button>
       </div>
       <div class="tree-list" role="tree"></div>
       <div class="tree-foot hidden"></div>
@@ -374,6 +430,7 @@
     const searchInput = popover.querySelector(".tree-search");
     const expandBtn = popover.querySelector(".tree-expand-all");
     const collapseBtn = popover.querySelector(".tree-collapse-all");
+    const refreshBtn = popover.querySelector(".tree-refresh-dirs");
     const listEl = popover.querySelector(".tree-list");
     const footEl = popover.querySelector(".tree-foot");
 
@@ -433,6 +490,7 @@
       searchInput.placeholder = t("def.ph_search_dir");
       expandBtn.textContent = t("def.tree_expand");
       collapseBtn.textContent = t("def.tree_collapse");
+      refreshBtn.title = t("action.refresh_dirs");
 
       const kw = keyword.trim().toLowerCase();
       const rows = [];
@@ -603,6 +661,10 @@
     collapseBtn.addEventListener("click", () => {
       expanded.clear();
       renderTreeList();
+    });
+
+    refreshBtn.addEventListener("click", () => {
+      refreshDirectoriesFromServer();
     });
 
     const apiObj = {
@@ -1265,153 +1327,6 @@
     }
   }
 
-  /* ===================== 整库批量建点向导 ===================== */
-  function bwPointNameFor(table) {
-    const ov = state.bwOverrides[table]?.name;
-    if (ov !== undefined) return ov;
-    const prefix = $("bw-prefix").value.trim();
-    return `${prefix}${table}`;
-  }
-
-  function bwPeriodFor(table) {
-    const ov = state.bwOverrides[table]?.interval;
-    if (ov !== undefined) return ov;
-    return Number($("bw-period").value || 60);
-  }
-
-  function bwFieldsFor(tb) {
-    const mode = $("bw-field-mode").value;
-    if (mode === "numeric" && tb.numeric_fields?.length) return tb.numeric_fields;
-    return tb.fields || [];
-  }
-
-  function renderBatchWizardTable() {
-    const tbody = $("bw-tbody");
-    const submitBtn = $("batch-submit");
-    const tables = state.bwTables || [];
-    if (!tables.length) {
-      tbody.innerHTML = `<tr><td colspan="7" class="empty-cell">${esc(t("empty.dash"))}</td></tr>`;
-      $("bw-check-all").checked = false;
-      submitBtn.disabled = true;
-      submitBtn.textContent = t("action.batch_create", { n: 0 });
-      return;
-    }
-
-    const selectable = tables.filter((tb) => bwFieldsFor(tb).length > 0);
-    $("bw-check-all").checked = selectable.length > 0 && selectable.every((tb) => state.bwSelected.has(tb.table));
-
-    tbody.innerHTML = tables
-      .map((tb) => {
-        const fields = bwFieldsFor(tb);
-        const disabled = fields.length === 0;
-        const checked = !disabled && state.bwSelected.has(tb.table);
-        const linked = tb.existing_definitions?.length > 0;
-        const badge = linked
-          ? `<span class="badge warn" title="${esc(tb.existing_definitions.join(", "))}">${esc(t("def.batch_linked"))}</span>`
-          : `<span class="badge ok">${esc(t("def.batch_new"))}</span>`;
-        const tableLabel = tb.chn_name ? `${tb.table} · ${tb.chn_name}` : tb.table;
-        return `
-          <tr class="${checked ? "selected" : ""}">
-            <td><input type="checkbox" class="bw-check" data-table="${esc(tb.table)}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}></td>
-            <td class="mono" title="${esc(tableLabel)}"><strong>${esc(tb.table)}</strong>${tb.chn_name ? ` <span class="text-muted">${esc(tb.chn_name)}</span>` : ""}</td>
-            <td class="num">${esc(tb.row_count)}</td>
-            <td class="num" title="${esc(fields.join(", "))}">${esc(fields.length)}</td>
-            <td class="cell-input">
-              <input type="text" class="bw-name" data-table="${esc(tb.table)}" value="${esc(bwPointNameFor(tb.table))}">
-            </td>
-            <td class="cell-input">
-              <input type="number" min="0" step="1" class="num-in bw-period" data-table="${esc(tb.table)}" value="${esc(bwPeriodFor(tb.table))}">
-            </td>
-            <td>${badge}</td>
-          </tr>`;
-      })
-      .join("");
-
-    const count = state.bwSelected.size;
-    submitBtn.disabled = count === 0;
-    submitBtn.textContent = t("action.batch_create", { n: count });
-  }
-
-  async function loadBatchWizardTables() {
-    const db = $("bw-db").value;
-    if (!db) return;
-    try {
-      const summary = await api(`/api/source/tables/summary?source_database=${encodeURIComponent(db)}`);
-      state.bwTables = summary.tables || [];
-      state.bwOverrides = {};
-      state.bwSelected = new Set(
-        state.bwTables
-          .filter((tb) => !tb.existing_definitions?.length && bwFieldsFor(tb).length > 0)
-          .map((tb) => tb.table)
-      );
-      renderBatchWizardTable();
-    } catch (err) {
-      state.bwTables = [];
-      state.bwSelected.clear();
-      renderBatchWizardTable();
-      toast(err.message, "error");
-    }
-  }
-
-  async function openBatchWizard() {
-    try {
-      state.config = await api("/api/config");
-      renderMetrics();
-    } catch {
-      // 忽略瞬断
-    }
-    renderSourceDbSelect($("bw-db"), (state.config.source_databases || [])[0] || state.config.default_source_db, false);
-    renderTargetDirTree(bwTargetDirTree, "", false);
-    $("bw-prefix").value = "";
-    $("bw-period").value = "60";
-    $("bw-field-mode").value = "numeric";
-    $("bw-conflict").value = "skip";
-    $("bw-enabled").checked = true;
-    $("batch-backdrop").classList.add("open");
-    await loadBatchWizardTables();
-  }
-
-  async function submitBatchWizard() {
-    const db = $("bw-db").value;
-    const targetDir = (bwTargetDirTree ? bwTargetDirTree.getValue() : "").trim();
-    const enabled = $("bw-enabled").checked;
-    const items = [];
-    for (const tb of state.bwTables) {
-      if (!state.bwSelected.has(tb.table)) continue;
-      const fields = bwFieldsFor(tb);
-      if (!fields.length) continue;
-      items.push({
-        name: bwPointNameFor(tb.table).trim(),
-        source_database: db,
-        source_table: tb.table,
-        target_dir: targetDir,
-        fields,
-        interval_seconds: Math.max(0, Number(bwPeriodFor(tb.table)) || 0),
-        filter: "",
-        enabled
-      });
-    }
-    if (!items.length) {
-      toast(t("def.toast_need_tables"), "error");
-      return;
-    }
-    try {
-      const res = await api("/api/definitions/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items, mode: $("bw-conflict").value })
-      });
-      toast(
-        t("def.toast_imported", { c: res.created, u: res.updated, s: res.skipped, e: (res.errors || []).length }),
-        (res.errors || []).length ? "error" : "ok"
-      );
-      $("batch-backdrop").classList.remove("open");
-      await loadAll();
-    } catch (err) {
-      toast(err.message, "error");
-    }
-  }
-
   /* ===================== 整表采样居中双栏工作台 ===================== */
   function tsEnsureConfig(tb) {
     const existing = state.ts.configs[tb.table];
@@ -1797,6 +1712,52 @@
     }
   }
 
+  async function batchSample() {
+    const ids = [...state.selectedIds];
+    if (!ids.length) return;
+    const btn = $("batch-sample");
+    btn.disabled = true;
+    try {
+      const res = await api("/api/sample/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids })
+      });
+      toast(
+        t("def.toast_batch_sample", { ok: (res.completed || []).length, fail: (res.failed || []).length }),
+        (res.failed || []).length ? "error" : "ok"
+      );
+      await loadAll();
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function batchDelete() {
+    const ids = [...state.selectedIds];
+    if (!ids.length) return;
+    const ok = await confirmModal({
+      title: t("def.confirm_batch_del_title"),
+      body: t("def.confirm_batch_del_body", { n: ids.length }),
+      confirmText: t("action.delete")
+    });
+    if (!ok) return;
+    try {
+      const res = await api("/api/definitions/batch-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids })
+      });
+      state.selectedIds.clear();
+      toast(t("def.toast_batch_del", { n: res.deleted }), "ok");
+      await loadAll();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
   async function deleteDefinition(id) {
     const def = state.definitions.find((d) => d.id === id);
     if (!def) return;
@@ -1828,14 +1789,16 @@
 
   async function loadAll() {
     try {
-      const [cfg, defs, health] = await Promise.all([
+      const [cfg, defs, statusData] = await Promise.all([
         api("/api/config"),
         api("/api/definitions"),
-        api("/api/health")
+        api("/api/status")
       ]);
       state.config = cfg;
       state.definitions = defs;
-      state.health = health;
+      state.health = statusData;
+      state.runtimeById = new Map((statusData.items || []).map((it) => [it.id, it]));
+      syncAlarmsFromStatus(statusData);
       const validIds = new Set(defs.map((d) => d.id));
       [...state.selectedIds].forEach((id) => {
         if (!validIds.has(id)) state.selectedIds.delete(id);
@@ -1901,17 +1864,7 @@
     $("btn-import-json").addEventListener("click", () => $("import-backdrop").classList.add("open"));
     $("import-cancel").addEventListener("click", () => $("import-backdrop").classList.remove("open"));
     $("import-form").addEventListener("submit", submitImport);
-    $("btn-batch-wizard").addEventListener("click", openBatchWizard);
     $("btn-table-sample").addEventListener("click", openTableSample);
-    const closeBatch = () => {
-      closeAllDirTrees();
-      $("batch-backdrop").classList.remove("open");
-    };
-    $("batch-close").addEventListener("click", closeBatch);
-    $("batch-cancel").addEventListener("click", closeBatch);
-    $("batch-backdrop").addEventListener("click", (e) => {
-      if (e.target === $("batch-backdrop")) closeBatch();
-    });
     $("ts-close").addEventListener("click", closeTableSample);
     $("ts-cancel").addEventListener("click", closeTableSample);
     $("ts-backdrop").addEventListener("click", (e) => {
@@ -1920,18 +1873,29 @@
     document.addEventListener("click", () => closeAllDirTrees());
     window.addEventListener("resize", () => closeAllDirTrees());
     document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        if ($("drawer-backdrop").classList.contains("open")) {
+          e.preventDefault();
+          saveDefinition(false);
+          return;
+        }
+        if ($("ts-backdrop").classList.contains("open") && !$("ts-save").disabled) {
+          e.preventDefault();
+          submitTableSample(false);
+          return;
+        }
+      }
       if (e.key !== "Escape") return;
       if (openDirTrees.size > 0) {
         closeAllDirTrees();
         return;
       }
       if ($("drawer-backdrop").classList.contains("open")) closeDrawer();
-      if ($("batch-backdrop").classList.contains("open")) closeBatch();
       if ($("ts-backdrop").classList.contains("open")) closeTableSample();
       if ($("import-backdrop").classList.contains("open")) $("import-backdrop").classList.remove("open");
     });
 
-    // 初始化 5 个可折叠多级目录树选择器
+    // 初始化 4 个可折叠多级目录树选择器
     targetDirTree = createDirTreePicker($("f-target-dir-trigger"), {
       allowCustom: true,
       defaultDirMode: true,
@@ -1960,9 +1924,6 @@
           $("preview-wrap").innerHTML = "";
         }
       }
-    });
-    bwTargetDirTree = createDirTreePicker($("bw-target-dir-trigger"), {
-      defaultDirMode: true
     });
     tsSourceDirTree = createDirTreePicker($("ts-source-dir-trigger"), {
       includeAll: true,
@@ -2068,9 +2029,17 @@
       tsAppendFilter(tsFormatCondition(field, val, op));
       $("ts-fb-val").value = "";
     });
+    let _tsFilterTimer = null;
     $("ts-filter").addEventListener("input", () => {
       tsSyncActiveConfigFromForm();
       tsRenderTableList();
+      clearTimeout(_tsFilterTimer);
+      _tsFilterTimer = setTimeout(() => {
+        const el = $("ts-filter");
+        const ok = validateFilterExpr(el.value);
+        el.classList.toggle("is-invalid", !ok);
+        el.title = ok ? "" : t("def.filter_syntax_err");
+      }, 350);
     });
     $("ts-test-filter").addEventListener("click", () => {
       tsSyncActiveConfigFromForm();
@@ -2086,44 +2055,6 @@
     });
     $("ts-save").addEventListener("click", () => submitTableSample(false));
     $("ts-save-run").addEventListener("click", () => submitTableSample(true));
-    $("batch-submit").addEventListener("click", submitBatchWizard);
-    $("bw-db").addEventListener("change", loadBatchWizardTables);
-    $("bw-field-mode").addEventListener("change", renderBatchWizardTable);
-    $("bw-prefix").addEventListener("input", renderBatchWizardTable);
-    $("bw-period").addEventListener("input", renderBatchWizardTable);
-    $("bw-check-all").addEventListener("change", (e) => {
-      const checked = e.target.checked;
-      state.bwTables.forEach((tb) => {
-        if (bwFieldsFor(tb).length === 0) return;
-        if (checked) state.bwSelected.add(tb.table);
-        else state.bwSelected.delete(tb.table);
-      });
-      renderBatchWizardTable();
-    });
-    $("bw-tbody").addEventListener("change", (e) => {
-      const cb = e.target.closest(".bw-check");
-      if (cb) {
-        if (cb.checked) state.bwSelected.add(cb.dataset.table);
-        else state.bwSelected.delete(cb.dataset.table);
-        renderBatchWizardTable();
-        return;
-      }
-      const nameIn = e.target.closest(".bw-name");
-      if (nameIn) {
-        state.bwOverrides[nameIn.dataset.table] = {
-          ...(state.bwOverrides[nameIn.dataset.table] || {}),
-          name: nameIn.value
-        };
-        return;
-      }
-      const perIn = e.target.closest(".bw-period");
-      if (perIn) {
-        state.bwOverrides[perIn.dataset.table] = {
-          ...(state.bwOverrides[perIn.dataset.table] || {}),
-          interval: Number(perIn.value)
-        };
-      }
-    });
 
     // 主表筛选与操作
     $("def-search").addEventListener("input", (e) => {
@@ -2179,8 +2110,16 @@
       syncActiveItemFromForm();
       renderItemsStrip();
     });
+    let _fFilterTimer = null;
     $("f-filter").addEventListener("input", () => {
       syncActiveItemFromForm();
+      clearTimeout(_fFilterTimer);
+      _fFilterTimer = setTimeout(() => {
+        const el = $("f-filter");
+        const ok = validateFilterExpr(el.value);
+        el.classList.toggle("is-invalid", !ok);
+        el.title = ok ? "" : t("def.filter_syntax_err");
+      }, 350);
     });
     $("f-fields").addEventListener("change", () => {
       syncActiveItemFromForm();
@@ -2273,6 +2212,8 @@
 
     $("batch-enable").addEventListener("click", () => batchToggle(true));
     $("batch-disable").addEventListener("click", () => batchToggle(false));
+    $("batch-sample").addEventListener("click", batchSample);
+    $("batch-delete").addEventListener("click", batchDelete);
 
     $("check-all").addEventListener("change", (e) => {
       const checked = e.target.checked;
@@ -2319,10 +2260,8 @@
     onLangChange(() => {
       renderMetrics();
       renderTable();
-      renderBatchWizardTable();
       targetDirTree?.refreshLabels();
       sourceDirTree?.refreshLabels();
-      bwTargetDirTree?.refreshLabels();
       tsSourceDirTree?.refreshLabels();
       tsTargetDirTree?.refreshLabels();
       if ($("drawer-backdrop").classList.contains("open")) {
@@ -2334,7 +2273,7 @@
     });
   }
 
-  initChrome();
+  initChrome({ pollGlobalAlarms: false });
   bindEvents();
 
   loadAll().then(() => {

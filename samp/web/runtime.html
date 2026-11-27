@@ -86,6 +86,12 @@
             <button type="button" class="tab-btn" data-tab="logs" data-i18n="rt.tab_logs">执行日志</button>
             <button type="button" class="tab-btn" data-tab="storage" data-i18n="rt.tab_storage">结果库管理</button>
           </div>
+          <select id="status-filter" class="select-ctrl">
+            <option value="all" data-i18n="rt.filter_all">全部</option>
+            <option value="error" data-i18n="rt.filter_error">仅异常</option>
+            <option value="auto" data-i18n="rt.filter_auto">自动调度</option>
+            <option value="manual" data-i18n="rt.filter_manual">手动</option>
+          </select>
           <select id="log-filter" class="select-ctrl hidden">
             <option value="all" data-i18n="filter.all_logs">全部日志</option>
             <option value="ok" data-i18n="filter.only_ok">仅成功</option>
@@ -102,6 +108,13 @@
             <span data-i18n="action.refresh">刷新</span>
           </button>
         </div>
+      </div>
+
+      <!-- 近 50 次执行趋势 Sparkline 紧凑条 -->
+      <div class="spark-strip" id="spark-strip">
+        <span class="spark-title" data-i18n="rt.spark_title">近 50 次</span>
+        <canvas id="spark-canvas" class="spark-canvas"></canvas>
+        <span class="spark-meta" id="spark-meta">—</span>
       </div>
 
       <!-- Tab 1: 单点运行状态 -->
@@ -172,6 +185,24 @@
       </div>
     </section>
   </main>
+  </div>
+</div>
+
+<!-- 结果库在线透视模态框 -->
+<div class="modal-backdrop" id="inspect-db-backdrop">
+  <div class="modal modal-accent modal-wide" role="dialog" aria-modal="true">
+    <div class="modal-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <span id="inspect-db-title" class="mono">—</span>
+      <span id="inspect-db-meta" class="mono text-muted" style="font-size:11px;font-weight:500">—</span>
+    </div>
+    <div class="modal-body">
+      <div class="inspect-tabs" id="inspect-db-tables"></div>
+      <div class="inspect-cols" id="inspect-db-cols"></div>
+      <div class="inspect-table-wrap" id="inspect-db-wrap"></div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" id="inspect-db-close" data-i18n="action.close">关闭</button>
+    </div>
   </div>
 </div>
 

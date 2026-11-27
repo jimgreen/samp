@@ -992,6 +992,85 @@ def test_table_sample_wildcard_schema_evolution_and_snapshot_query(tmp_path):
         assert len(b_data["sampled"][0]["tables"]) == 2
 
 
+def test_wal_batch_ops_scan_cache_and_storage_inspect_vacuum(tmp_path):
+    """验证 WAL 日志模式、目录扫描缓存与强制刷新、批量采样/删除以及结果库在线透视与 VACUUM。"""
+    src_db = tmp_path / "rt" / "grid.db"
+    src_db.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(src_db)) as conn:
+        conn.execute("CREATE TABLE line (id INTEGER PRIMARY KEY, name TEXT, mw REAL)")
+        conn.executemany("INSERT INTO line VALUES (?, ?, ?)", [(1, "L1", 110.5), (2, "L2", 220.0)])
+        conn.commit()
+
+    app = create_app(
+        definition_db=tmp_path / "samp" / "samp_def.db",
+        source_db=src_db,
+        result_dir=tmp_path / "samp",
+        enable_scheduler=False,
+        root_dir=tmp_path,
+    )
+    store = app.state.store
+
+    # 1. 验证连接默认开启 WAL 模式
+    with store._connect(store.definition_db) as conn:
+        jm = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert str(jm).lower() == "wal"
+
+    with TestClient(app) as client:
+        # 2. 目录缓存命中与 refresh=1 强制重扫
+        cfg1 = client.get("/api/config").json()
+        assert "rt/grid.db" in cfg1["source_databases"]
+        extra_dir = tmp_path / "fresh_dir"
+        extra_dir.mkdir(parents=True, exist_ok=True)
+        # 未 refresh 仍命中 TTL 缓存
+        cfg_cached = client.get("/api/config").json()
+        assert "fresh_dir" not in cfg_cached["directories"]
+        # refresh=1 立即扫出新目录
+        cfg_refreshed = client.get("/api/config?refresh=1").json()
+        assert "fresh_dir" in cfg_refreshed["directories"]
+
+        # 3. 建 2 个定义并测试 /api/sample/batch
+        d1 = client.post(
+            "/api/definitions",
+            json={"name": "line_a", "source_database": "rt/grid.db", "source_table": "line", "fields": ["*"], "interval_seconds": 0},
+        ).json()
+        d2 = client.post(
+            "/api/definitions",
+            json={"name": "line_b", "source_database": "rt/grid.db", "source_table": "line", "fields": ["name", "mw"], "interval_seconds": 0},
+        ).json()
+
+        batch_s = client.post("/api/sample/batch", json={"ids": [d1["id"], d2["id"]]})
+        assert batch_s.status_code == 200, batch_s.text
+        bs_data = batch_s.json()
+        assert bs_data["requested"] == 2
+        assert len(bs_data["completed"]) == 2
+        assert bs_data["failed"] == []
+
+        # 4. 结果库在线透视 /api/storage/inspect 与 /api/storage/vacuum
+        dbs = client.get("/api/storage/databases").json()["items"]
+        assert len(dbs) >= 2
+        target_path = dbs[0]["path"]
+        insp = client.get("/api/storage/inspect", params={"path": target_path, "limit": 10})
+        assert insp.status_code == 200, insp.text
+        insp_data = insp.json()
+        assert insp_data["path"] == target_path
+        assert len(insp_data["tables"]) >= 1
+        assert len(insp_data["rows"]) == 2
+        assert "sample_time" in insp_data["columns"]
+
+        vac = client.post("/api/storage/vacuum", json={"path": target_path})
+        assert vac.status_code == 200, vac.text
+        vac_data = vac.json()
+        assert vac_data["ok"] is True
+        assert vac_data["after_bytes"] > 0
+
+        # 5. 批量删除 /api/definitions/batch-delete
+        bdel = client.post("/api/definitions/batch-delete", json={"ids": [d1["id"], d2["id"]]})
+        assert bdel.status_code == 200, bdel.text
+        assert bdel.json()["deleted"] == 2
+        assert client.get("/api/definitions").json() == []
+
+
+
 
 
 

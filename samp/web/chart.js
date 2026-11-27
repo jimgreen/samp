@@ -191,6 +191,7 @@
       this.lines = [];
       this.mode = "shared";
       this.pinnedTime = null;
+      this.thresholds = { low: null, high: null };
       this.fullX = [0, 1];
       this.viewX = [0, 1];
       this.hoverPx = null;
@@ -230,6 +231,56 @@
     setPinnedTime(ts) {
       this.pinnedTime = ts === null || ts === undefined ? null : Number(ts);
       this.draw();
+    }
+
+    setThresholds({ low = null, high = null } = {}) {
+      const parse = (v) => {
+        if (v === null || v === undefined || String(v).trim() === "") return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      this.thresholds = { low: parse(low), high: parse(high) };
+      this.draw();
+    }
+
+    exportPng(filename = "samp_chart.png") {
+      this.draw();
+      const pal = chartPalette();
+      const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      const legendH = 28;
+      const w = this.canvas.width;
+      const h = this.canvas.height + Math.round(legendH * dpr);
+      const out = document.createElement("canvas");
+      out.width = w;
+      out.height = h;
+      const ctx = out.getContext("2d");
+      ctx.fillStyle = pal.bg;
+      ctx.fillRect(0, 0, w, h);
+
+      // 顶部绘制紧凑图例条
+      ctx.save();
+      ctx.scale(dpr, dpr);
+      const visible = this.lines.filter((l) => !l.hidden);
+      ctx.font = "11px JetBrains Mono, Consolas, Microsoft YaHei, sans-serif";
+      ctx.textBaseline = "middle";
+      let x = 14;
+      const cy = legendH / 2;
+      for (const line of visible.slice(0, 10)) {
+        ctx.fillStyle = line.color;
+        ctx.fillRect(x, cy - 4, 9, 8);
+        x += 13;
+        ctx.fillStyle = pal.labelText;
+        ctx.fillText(line.label, x, cy);
+        x += ctx.measureText(line.label).width + 14;
+        if (x > w / dpr - 40) break;
+      }
+      ctx.restore();
+
+      ctx.drawImage(this.canvas, 0, Math.round(legendH * dpr));
+      const link = document.createElement("a");
+      link.download = filename;
+      link.href = out.toDataURL("image/png");
+      link.click();
     }
 
     setData(seriesPayload) {
@@ -585,7 +636,15 @@
             if (lo < sharedMin) sharedMin = lo;
             if (hi > sharedMax) sharedMax = hi;
           }
-          if (!Number.isFinite(sharedMin) || !Number.isFinite(sharedMax)) {
+          if (Number.isFinite(sharedMin) && Number.isFinite(sharedMax)) {
+            if (this.thresholds.low !== null) sharedMin = Math.min(sharedMin, this.thresholds.low);
+            if (this.thresholds.high !== null) sharedMax = Math.max(sharedMax, this.thresholds.high);
+            if (sharedMin === sharedMax) {
+              const d = Math.abs(sharedMin) * 0.1 || 1;
+              sharedMin -= d;
+              sharedMax += d;
+            }
+          } else {
             sharedMin = 0;
             sharedMax = 1;
           }
@@ -594,6 +653,7 @@
           sharedMax = 100;
         }
         const sharedSpan = Math.max(1e-9, sharedMax - sharedMin);
+        this._sharedRange = !normalized ? [sharedMin, sharedMax] : null;
 
         const yTicks = 4;
         ctx.font = "11px JetBrains Mono, Consolas, monospace";
@@ -688,6 +748,47 @@
         ctx.moveTo(px, plot.y);
         ctx.lineTo(px, plot.y + plot.h);
         ctx.stroke();
+      }
+
+      // 同轴模式下绘制上下限参考阈值虚线
+      if (!stacked && !normalized && this._sharedRange) {
+        const [sMin, sMax] = this._sharedRange;
+        const sSpan = Math.max(1e-9, sMax - sMin);
+        const cs = getComputedStyle(document.documentElement);
+        const refs = [
+          { val: this.thresholds.low, color: cs.getPropertyValue("--warn").trim() || "#D97706", tag: "L" },
+          { val: this.thresholds.high, color: cs.getPropertyValue("--danger").trim() || "#DC2626", tag: "H" }
+        ];
+        ctx.font = "10px JetBrains Mono, Consolas, monospace";
+        for (const r of refs) {
+          if (r.val === null) continue;
+          const ry = Math.round(plot.y + plot.h - ((r.val - sMin) / sSpan) * plot.h) + 0.5;
+          if (ry < plot.y - 2 || ry > plot.y + plot.h + 2) continue;
+          ctx.beginPath();
+          ctx.setLineDash([5, 4]);
+          ctx.strokeStyle = r.color;
+          ctx.lineWidth = 1.3;
+          ctx.moveTo(plot.x, ry);
+          ctx.lineTo(plot.x + plot.w, ry);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          const text = `${r.tag}: ${formatAxisVal(r.val)}`;
+          const tw = ctx.measureText(text).width + 10;
+          const bx = plot.x + plot.w - tw - 4;
+          const by = Math.max(plot.y + 2, Math.min(plot.y + plot.h - 16, ry - 7));
+          ctx.fillStyle = pal.labelBg;
+          ctx.strokeStyle = r.color;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(bx, by, tw, 14, 3);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = r.color;
+          ctx.textAlign = "left";
+          ctx.textBaseline = "top";
+          ctx.fillText(text, bx + 5, by + 2);
+        }
       }
 
       if (this.dragMode === "zoom") {
