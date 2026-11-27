@@ -1,66 +1,67 @@
 /* ==========================================================================
-   SAMP 大屏幕主画面专属内容区样式（壳层由 samp.css 全站统一托管）
+   SAMP 大屏幕主画面专属内容区样式（仙气 × 柔和科幻 × 温润琉璃星舱）
    ========================================================================== */
 
-/* ===================== 右侧一屏全景态势主区 ===================== */
 .portal-main {
   flex: 1;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 11px;
 }
 
-/* 1. 顶部 5 联 KPI 卡片条 */
+/* 1. 顶部 5 联柔光琉璃 KPI 卡 */
 .hero-kpi-strip {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
+  gap: 11px;
   flex-shrink: 0;
 }
 
 .kpi-card {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border-radius: var(--radius-card);
+  gap: 11px;
+  padding: 10px 14px;
+  border-radius: 16px;
   background: var(--dash-glass);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
   border: 1px solid var(--dash-border);
   box-shadow: var(--dash-shadow);
   min-width: 0;
-  transition: border-color 140ms ease, transform 140ms ease;
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, box-shadow 200ms ease;
 }
 
 .kpi-card:hover {
   border-color: var(--dash-border-strong);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: 0 14px 32px var(--dash-glow), inset 0 1px 0 var(--dash-sheen);
 }
 
 .kpi-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--accent-soft);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, #a78bfa 16%, transparent));
   border: 1px solid var(--dash-border);
   color: var(--accent);
   flex-shrink: 0;
 }
 
 .kpi-icon.ok {
-  background: var(--ok-soft);
-  border-color: color-mix(in srgb, var(--ok) 36%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--ok) 18%, transparent), color-mix(in srgb, var(--accent) 12%, transparent));
+  border-color: color-mix(in srgb, var(--ok) 32%, transparent);
   color: var(--ok);
 }
 
 .kpi-icon.warn {
-  background: var(--warn-soft);
-  border-color: color-mix(in srgb, var(--warn) 36%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--warn) 18%, transparent), color-mix(in srgb, #f9a8d4 14%, transparent));
+  border-color: color-mix(in srgb, var(--warn) 32%, transparent);
   color: var(--warn);
 }
 
@@ -69,7 +70,7 @@
   height: 18px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.8;
+  stroke-width: 1.7;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -100,13 +101,13 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 20px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1.1;
   color: var(--accent);
 }
 
 [data-color-scheme="dark"] .kpi-val strong {
-  text-shadow: 0 0 10px var(--dash-glow);
+  text-shadow: 0 0 14px var(--dash-glow);
 }
 
 .kpi-val strong.ok { color: var(--ok); }
@@ -120,31 +121,35 @@
   text-overflow: ellipsis;
 }
 
-/* 2. 中央动态采样流拓扑大舞台 */
+/* 2. 中央空灵星海拓扑舞台 */
 .hero-stage {
   position: relative;
   flex: 1.25;
   min-height: 224px;
-  border-radius: var(--radius-card);
+  border-radius: 20px;
   background: var(--dash-glass);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
   border: 1px solid var(--dash-border);
   box-shadow: var(--dash-shadow);
   overflow: hidden;
 }
 
+/* 柔和空灵月晕与淡星轨（告别工业虚线靶环） */
 .hero-stage::before {
   content: "";
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 340px;
-  height: 340px;
+  width: 360px;
+  height: 360px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  border: 1px dashed color-mix(in srgb, var(--accent) 18%, transparent);
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 12%, transparent) 0%, color-mix(in srgb, #c4b5fd 8%, transparent) 44%, transparent 72%);
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, transparent);
   pointer-events: none;
   z-index: 1;
+  animation: halo-pulse 9s ease-in-out infinite alternate;
 }
 
 .hero-stage::after {
@@ -152,19 +157,24 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 490px;
-  height: 490px;
+  width: 520px;
+  height: 520px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--accent) 9%, transparent);
+  border: 1px solid color-mix(in srgb, #c4b5fd 10%, transparent);
   pointer-events: none;
   z-index: 1;
 }
 
+@keyframes halo-pulse {
+  0% { transform: translate(-50%, -50%) scale(0.98); opacity: 0.78; }
+  100% { transform: translate(-50%, -50%) scale(1.04); opacity: 1; }
+}
+
 .hero-root-badge {
   position: absolute;
-  top: 10px;
-  left: 12px;
+  top: 12px;
+  left: 14px;
   display: flex;
   gap: 6px;
   z-index: 8;
@@ -172,8 +182,8 @@
 
 .hero-env-badges {
   position: absolute;
-  top: 10px;
-  right: 12px;
+  top: 12px;
+  right: 14px;
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
@@ -184,10 +194,11 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 9px;
+  padding: 4px 11px;
   border-radius: 9999px;
   background: var(--dash-glass-strong);
   border: 1px solid var(--dash-border);
+  box-shadow: inset 0 1px 0 var(--dash-sheen);
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 600;
@@ -199,7 +210,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* SVG 流动光轨 */
+/* 细腻柔光丝带 SVG 连线 */
 .hero-flow-svg {
   position: absolute;
   inset: 0;
@@ -211,31 +222,32 @@
 
 .flow-track {
   fill: none;
-  stroke: color-mix(in srgb, var(--ok) 22%, transparent);
-  stroke-width: 6;
+  stroke: color-mix(in srgb, var(--ok) 18%, transparent);
+  stroke-width: 7;
   stroke-linecap: round;
 }
 
 .flow-track.accent {
-  stroke: color-mix(in srgb, var(--accent) 22%, transparent);
+  stroke: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .flow-track.danger {
-  stroke: color-mix(in srgb, var(--danger) 24%, transparent);
+  stroke: color-mix(in srgb, var(--danger) 20%, transparent);
 }
 
 .flow-track.idle {
-  stroke: color-mix(in srgb, var(--text-tertiary) 18%, transparent);
-  stroke-width: 2.5;
+  stroke: color-mix(in srgb, var(--text-tertiary) 12%, transparent);
+  stroke-width: 2;
 }
 
 .flow-path {
   fill: none;
   stroke: var(--ok);
-  stroke-width: 2.4;
+  stroke-width: 2;
   stroke-linecap: round;
-  stroke-dasharray: 10 9;
-  animation: dash-flow 1.15s linear infinite;
+  stroke-dasharray: 9 11;
+  filter: url(#silk-glow);
+  animation: dash-flow 1.45s linear infinite;
 }
 
 .flow-path.accent {
@@ -247,48 +259,53 @@
 }
 
 .flow-path.idle {
-  stroke: color-mix(in srgb, var(--text-tertiary) 42%, transparent);
-  stroke-width: 1.6;
-  stroke-dasharray: 4 7;
+  stroke: color-mix(in srgb, var(--text-tertiary) 32%, transparent);
+  stroke-width: 1.4;
+  stroke-dasharray: 3 8;
+  filter: none;
   animation: none;
 }
 
 @keyframes dash-flow {
-  from { stroke-dashoffset: 38; }
+  from { stroke-dashoffset: 40; }
   to { stroke-dashoffset: 0; }
 }
 
-/* 中央全息八角焦点面板 */
+/* 中央温润柔光琉璃星舱（告别尖锐八角装甲框） */
 .hero-center-hud {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
   z-index: 6;
-  padding: 2px;
-  background: linear-gradient(135deg, var(--accent), var(--ok), var(--accent));
-  clip-path: polygon(18px 0, calc(100% - 18px) 0, 100% 18px, 100% calc(100% - 18px), calc(100% - 18px) 100%, 18px 100%, 0 calc(100% - 18px), 0 18px);
-  filter: drop-shadow(0 6px 18px var(--dash-glow));
+  padding: 1.5px;
+  border-radius: 28px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 68%, transparent), color-mix(in srgb, #c4b5fd 65%, transparent), color-mix(in srgb, var(--ok) 68%, transparent));
+  box-shadow: 0 16px 48px var(--dash-glow), 0 0 36px color-mix(in srgb, #c4b5fd 22%, transparent);
 }
 
 .hud-frame {
   display: flex;
   align-items: center;
   gap: 18px;
-  padding: 16px 24px;
+  padding: 18px 26px;
+  border-radius: 26.5px;
   background: var(--dash-hud-inner);
-  clip-path: polygon(17px 0, calc(100% - 17px) 0, 100% 17px, 100% calc(100% - 17px), calc(100% - 17px) 100%, 17px 100%, 0 calc(100% - 17px), 0 17px);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  box-shadow: inset 0 1px 0 var(--dash-sheen);
 }
 
 .hud-gauge {
   width: 98px;
   height: 98px;
   flex-shrink: 0;
+  filter: drop-shadow(0 0 10px var(--dash-glow));
 }
 
 .hud-radar-ring {
   transform-origin: 60px 60px;
-  animation: hud-spin 26s linear infinite;
+  animation: hud-spin 36s linear infinite;
 }
 
 @keyframes hud-spin {
@@ -300,13 +317,13 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 132px;
+  min-width: 134px;
 }
 
 .hud-title {
   font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
+  font-weight: 600;
+  letter-spacing: 0.14em;
   color: var(--text-secondary);
 }
 
@@ -321,7 +338,7 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 42px;
-  font-weight: 800;
+  font-weight: 700;
   background: var(--dash-pct-grad);
   -webkit-background-clip: text;
   background-clip: text;
@@ -330,7 +347,7 @@
 
 .hud-pct span {
   font-size: 18px;
-  font-weight: 800;
+  font-weight: 700;
   color: var(--ok);
 }
 
@@ -341,7 +358,7 @@
   white-space: nowrap;
 }
 
-/* 左右两侧各 3 组拓扑节点 */
+/* 左右各 3 组柔光琉璃拓扑节点 */
 .hero-col {
   position: absolute;
   top: 50%;
@@ -349,8 +366,8 @@
   z-index: 6;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: clamp(200px, 23%, 272px);
+  gap: 11px;
+  width: clamp(204px, 23%, 272px);
 }
 
 .hero-col-left { left: 28px; }
@@ -358,48 +375,49 @@
 
 .topo-node {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 9px;
-  padding: 9px 12px;
-  border-radius: 8px;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 15px;
   background: var(--dash-glass-strong);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--dash-border);
   box-shadow: var(--dash-shadow);
   color: var(--text-primary);
   text-decoration: none;
   cursor: pointer;
-  transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, box-shadow 200ms ease;
 }
 
 .topo-node:hover {
-  transform: translateY(-1px);
-  border-color: var(--accent);
-  box-shadow: 0 6px 18px var(--dash-glow);
+  transform: translateY(-2px);
+  border-color: var(--dash-border-strong);
+  box-shadow: 0 12px 28px var(--dash-glow), inset 0 1px 0 var(--dash-sheen);
 }
 
-.topo-node.ok-state { border-color: color-mix(in srgb, var(--ok) 44%, var(--border-color)); }
-.topo-node.danger-state { border-color: color-mix(in srgb, var(--danger) 56%, var(--border-color)); }
+.topo-node.ok-state { border-color: color-mix(in srgb, var(--ok) 32%, var(--border-color)); }
+.topo-node.danger-state { border-color: color-mix(in srgb, var(--danger) 44%, var(--border-color)); }
 
 .node-icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
+  width: 32px;
+  height: 32px;
+  border-radius: 11px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--accent-soft);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, #a78bfa 16%, transparent));
   color: var(--accent);
 }
 
 .node-icon.ok {
-  background: var(--ok-soft);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--ok) 18%, transparent), color-mix(in srgb, var(--accent) 12%, transparent));
   color: var(--ok);
 }
 
 .node-icon.warn {
-  background: var(--warn-soft);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--warn) 18%, transparent), color-mix(in srgb, #f9a8d4 14%, transparent));
   color: var(--warn);
 }
 
@@ -413,7 +431,7 @@
   height: 16px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.8;
+  stroke-width: 1.7;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -427,7 +445,7 @@
 
 .node-name {
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -454,7 +472,7 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 18px;
-  font-weight: 800;
+  font-weight: 700;
   color: var(--accent);
 }
 
@@ -466,14 +484,14 @@
   color: var(--text-secondary);
 }
 
-/* 3. 底部双联实时态势面板 */
+/* 3. 底部双联柔光态势面板 */
 .dash-bottom-grid {
   flex: 1;
   min-height: 196px;
   max-height: 280px;
   display: grid;
   grid-template-columns: 1.15fr 1fr;
-  gap: 10px;
+  gap: 11px;
 }
 
 .dash-panel {
@@ -481,9 +499,10 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-radius: var(--radius-card);
+  border-radius: 18px;
   background: var(--dash-glass);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
   border: 1px solid var(--dash-border);
   box-shadow: var(--dash-shadow);
   overflow: hidden;
@@ -494,27 +513,28 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--dash-border);
   flex-shrink: 0;
 }
 
 .dash-panel-title {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   color: var(--text-primary);
   white-space: nowrap;
 }
 
 .dash-panel-title::before {
   content: "";
-  width: 3px;
-  height: 12px;
-  border-radius: 2px;
-  background: var(--accent);
+  width: 4px;
+  height: 13px;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, var(--accent), #c4b5fd, var(--ok));
 }
 
 .trend-legend {
@@ -534,7 +554,7 @@
 .legend-dot {
   width: 8px;
   height: 8px;
-  border-radius: 2px;
+  border-radius: 9999px;
 }
 
 .legend-dot.ms { background: var(--accent); }
@@ -544,7 +564,7 @@
   position: relative;
   flex: 1;
   min-height: 0;
-  padding: 6px 10px 8px;
+  padding: 6px 12px 8px;
 }
 
 .trend-canvas-wrap canvas {
@@ -560,33 +580,33 @@
 }
 
 .dash-tab {
-  padding: 3px 9px;
-  border-radius: 5px;
+  padding: 3px 10px;
+  border-radius: 9999px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 120ms ease;
+  transition: all 140ms ease;
 }
 
 .dash-tab:hover {
   color: var(--text-primary);
-  background: var(--bg-subtle);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .dash-tab.active {
   color: var(--accent);
-  background: var(--accent-soft);
-  border-color: var(--dash-border);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, #a78bfa 14%, transparent));
+  border-color: var(--dash-border-strong);
 }
 
 .feed-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 4px 8px 6px;
+  padding: 5px 10px 7px;
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -597,17 +617,17 @@
   grid-template-columns: 56px minmax(0, 1fr) 74px 58px;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px;
-  border-radius: 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
   font-size: 12px;
   color: var(--text-primary);
   text-decoration: none;
   border: 1px solid transparent;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background 140ms ease, border-color 140ms ease;
 }
 
 .feed-row:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   border-color: var(--dash-border);
 }
 
@@ -640,10 +660,10 @@
 
 .feed-status {
   justify-self: end;
-  padding: 1px 6px;
+  padding: 2px 7px;
   border-radius: 9999px;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   font-family: var(--font-mono);
 }
 
@@ -658,35 +678,35 @@
 }
 
 .rank-idx {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
+  width: 19px;
+  height: 19px;
+  border-radius: 9999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 700;
   background: var(--bg-subtle);
   color: var(--text-secondary);
 }
 
 .rank-idx.top {
-  background: var(--accent-soft);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 22%, transparent), color-mix(in srgb, #a78bfa 20%, transparent));
   color: var(--accent);
 }
 
 .rank-bar-track {
   height: 6px;
   border-radius: 9999px;
-  background: var(--bg-subtle);
+  background: color-mix(in srgb, var(--bg-subtle) 78%, transparent);
   overflow: hidden;
 }
 
 .rank-bar-fill {
   height: 100%;
   border-radius: 9999px;
-  background: linear-gradient(90deg, var(--accent), var(--ok));
+  background: linear-gradient(90deg, var(--accent), #c4b5fd, var(--ok));
 }
 
 .feed-empty {
@@ -703,7 +723,7 @@
     width: 192px;
   }
   .hud-frame {
-    padding: 12px 16px;
+    padding: 14px 18px;
     gap: 12px;
   }
   .hud-pct strong {

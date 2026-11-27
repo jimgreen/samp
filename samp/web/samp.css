@@ -630,6 +630,101 @@
     linear-gradient(90deg, rgba(0, 230, 118, 0.035) 1px, transparent 1px);
 }
 
+/* 专属仙气科幻主题：云岚晨露（浅色） / 星雾极光（暗色） */
+[data-theme="cloud-lotus"] {
+  color-scheme: light;
+  --bg-canvas: #F3F6FD;
+  --bg-surface: #FFFFFF;
+  --bg-subtle: #EDF1FB;
+  --bg-hover: #F5F7FE;
+  --bg-selected: #EAE6FF;
+  --table-stripe: #F7F9FE;
+  --table-hover: #EEF1FD;
+  --sidebar-bg: #1E1B3A;
+  --sidebar-border: rgba(167, 139, 250, 0.16);
+  --sidebar-title: #948EC2;
+  --sidebar-text: #D7D4F5;
+  --sidebar-hover: rgba(167, 139, 250, 0.12);
+  --sidebar-active-bg: rgba(124, 107, 246, 0.24);
+  --sidebar-active-text: #FFFFFF;
+  --sidebar-active-bar: #8B7CF8;
+  --text-primary: #1F2440;
+  --text-secondary: #5E678A;
+  --text-tertiary: #949DBB;
+  --accent: #6D63F2;
+  --accent-hover: #5A4FE6;
+  --accent-soft: rgba(109, 99, 242, 0.11);
+  --accent-ring: rgba(109, 99, 242, 0.24);
+  --accent-contrast: #FFFFFF;
+  --ok: #14B8A6;
+  --ok-soft: rgba(20, 184, 166, 0.12);
+  --warn: #EAB308;
+  --warn-soft: rgba(234, 179, 8, 0.13);
+  --danger: #F43F5E;
+  --danger-soft: rgba(244, 63, 94, 0.11);
+  --border-color: rgba(139, 132, 232, 0.20);
+  --border-strong: rgba(124, 107, 246, 0.34);
+  --border: 1px solid var(--border-color);
+  --radius-card: 16px;
+  --radius-btn: 10px;
+  --shadow-card: 0 8px 28px rgba(98, 92, 184, 0.08), 0 1px 3px rgba(98, 92, 184, 0.05);
+  --shadow-overlay: 0 22px 54px rgba(62, 58, 138, 0.16);
+  --backdrop: rgba(31, 36, 64, 0.36);
+  --scrollbar-track: #F3F6FD;
+  --scrollbar-thumb: rgba(124, 107, 246, 0.28);
+  --canvas-grid: none;
+  --aurora-a: rgba(124, 107, 246, 0.15);
+  --aurora-b: rgba(45, 212, 191, 0.14);
+  --aurora-c: rgba(196, 181, 253, 0.20);
+}
+
+[data-theme="ethereal-aurora"] {
+  color-scheme: dark;
+  --bg-canvas: #0B1024;
+  --bg-surface: #131A36;
+  --bg-subtle: #1B2446;
+  --bg-hover: rgba(139, 216, 255, 0.08);
+  --bg-selected: rgba(139, 216, 255, 0.16);
+  --table-stripe: rgba(22, 30, 62, 0.62);
+  --table-hover: rgba(125, 211, 252, 0.10);
+  --sidebar-bg: #0D132B;
+  --sidebar-border: rgba(165, 180, 252, 0.18);
+  --sidebar-title: #8190BD;
+  --sidebar-text: #C9D5F5;
+  --sidebar-hover: rgba(165, 180, 252, 0.10);
+  --sidebar-active-bg: rgba(125, 211, 252, 0.16);
+  --sidebar-active-text: #F2F7FF;
+  --sidebar-active-bar: #7DD3FC;
+  --text-primary: #EEF4FF;
+  --text-secondary: #9FB0D9;
+  --text-tertiary: #6C7DA8;
+  --accent: #7DD3FC;
+  --accent-hover: #BAE6FD;
+  --accent-soft: rgba(125, 211, 252, 0.14);
+  --accent-ring: rgba(125, 211, 252, 0.30);
+  --accent-contrast: #0B1024;
+  --ok: #5EEAD4;
+  --ok-soft: rgba(94, 234, 212, 0.14);
+  --warn: #FCD34D;
+  --warn-soft: rgba(252, 211, 77, 0.14);
+  --danger: #FDA4AF;
+  --danger-soft: rgba(253, 164, 175, 0.15);
+  --border-color: rgba(165, 196, 255, 0.18);
+  --border-strong: rgba(147, 197, 253, 0.34);
+  --border: 1px solid var(--border-color);
+  --radius-card: 16px;
+  --radius-btn: 10px;
+  --shadow-card: 0 12px 34px rgba(5, 10, 30, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --shadow-overlay: 0 24px 64px rgba(4, 8, 26, 0.68), 0 0 32px rgba(125, 211, 252, 0.14);
+  --backdrop: rgba(8, 12, 30, 0.64);
+  --scrollbar-track: #0B1024;
+  --scrollbar-thumb: rgba(165, 196, 255, 0.24);
+  --canvas-grid: none;
+  --aurora-a: rgba(125, 211, 252, 0.18);
+  --aurora-b: rgba(196, 181, 253, 0.17);
+  --aurora-c: rgba(94, 234, 212, 0.13);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -3093,38 +3188,45 @@ body.resizing-sidebar {
 
 
 /* ==========================================================================
-   全站统一指挥舱桥壳层（/dashboard /definitions /runtime /query 零跳变共享）
+   全站统一「仙气 × 柔和科幻」琉璃星云壳层（4 页零跳变共享，适配全部 16 套主题）
    ========================================================================== */
 :root {
+  --aurora-a: color-mix(in srgb, var(--accent) 14%, transparent);
+  --aurora-b: color-mix(in srgb, var(--ok) 11%, transparent);
+  --aurora-c: rgba(167, 139, 250, 0.11);
   --dash-bg: var(--bg-canvas);
-  --dash-glass: color-mix(in srgb, var(--bg-surface) 88%, transparent);
-  --dash-glass-strong: color-mix(in srgb, var(--bg-surface) 95%, transparent);
-  --dash-border: color-mix(in srgb, var(--accent) 24%, var(--border-color));
-  --dash-border-strong: color-mix(in srgb, var(--accent) 46%, var(--border-color));
-  --dash-grid-line: color-mix(in srgb, var(--accent) 7%, transparent);
-  --dash-glow: color-mix(in srgb, var(--accent) 18%, transparent);
-  --dash-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
-  --dash-crest-bg: linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 96%, var(--accent) 4%), color-mix(in srgb, var(--bg-subtle) 92%, var(--accent) 8%));
-  --dash-hud-inner: radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--bg-surface) 96%, var(--accent) 4%), var(--bg-surface));
-  --dash-title-grad: linear-gradient(180deg, var(--text-primary) 0%, var(--accent) 100%);
-  --dash-pct-grad: linear-gradient(180deg, var(--accent) 0%, var(--ok) 100%);
-  --dash-corner: color-mix(in srgb, var(--accent) 42%, transparent);
+  --dash-radius: 15px;
+  --dash-glass: color-mix(in srgb, var(--bg-surface) 78%, transparent);
+  --dash-glass-strong: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  --dash-border: color-mix(in srgb, var(--accent) 18%, var(--border-color));
+  --dash-border-strong: color-mix(in srgb, var(--accent) 34%, var(--border-color));
+  --dash-sheen: rgba(255, 255, 255, 0.72);
+  --dash-star-dot: color-mix(in srgb, var(--accent) 16%, transparent);
+  --dash-glow: color-mix(in srgb, var(--accent) 22%, transparent);
+  --dash-shadow: 0 10px 30px rgba(71, 85, 135, 0.08), inset 0 1px 0 var(--dash-sheen);
+  --dash-crest-bg: linear-gradient(135deg, color-mix(in srgb, var(--bg-surface) 92%, var(--accent) 8%), color-mix(in srgb, var(--bg-surface) 88%, var(--ok) 12%));
+  --dash-hud-inner: radial-gradient(circle at 28% 24%, color-mix(in srgb, var(--bg-surface) 94%, var(--accent) 6%), color-mix(in srgb, var(--bg-surface) 84%, var(--ok) 4%));
+  --dash-title-grad: linear-gradient(110deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 55%, #a78bfa) 52%, var(--ok) 100%);
+  --dash-pct-grad: linear-gradient(135deg, var(--accent) 0%, #a78bfa 55%, var(--ok) 100%);
 }
 
 [data-color-scheme="dark"] {
+  --aurora-a: color-mix(in srgb, var(--accent) 18%, transparent);
+  --aurora-b: rgba(196, 181, 253, 0.14);
+  --aurora-c: color-mix(in srgb, var(--ok) 13%, transparent);
   --dash-bg: var(--bg-canvas);
-  --dash-glass: color-mix(in srgb, var(--bg-surface) 76%, transparent);
-  --dash-glass-strong: color-mix(in srgb, var(--bg-surface) 90%, transparent);
-  --dash-border: color-mix(in srgb, var(--accent) 32%, transparent);
-  --dash-border-strong: color-mix(in srgb, var(--accent) 56%, transparent);
-  --dash-grid-line: color-mix(in srgb, var(--accent) 8%, transparent);
+  --dash-glass: color-mix(in srgb, var(--bg-surface) 64%, transparent);
+  --dash-glass-strong: color-mix(in srgb, var(--bg-surface) 80%, transparent);
+  --dash-border: color-mix(in srgb, var(--accent) 20%, rgba(255, 255, 255, 0.08));
+  --dash-border-strong: color-mix(in srgb, var(--accent) 36%, rgba(255, 255, 255, 0.14));
+  --dash-sheen: rgba(255, 255, 255, 0.11);
+  --dash-star-dot: color-mix(in srgb, var(--accent) 22%, rgba(255, 255, 255, 0.10));
   --dash-glow: color-mix(in srgb, var(--accent) 26%, transparent);
-  --dash-shadow: 0 8px 24px rgba(0, 6, 18, 0.48), inset 0 0 14px color-mix(in srgb, var(--accent) 8%, transparent);
-  --dash-crest-bg: linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 92%, var(--accent) 14%), color-mix(in srgb, var(--bg-canvas) 94%, var(--accent) 8%));
-  --dash-hud-inner: radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--bg-surface) 94%, var(--accent) 16%), color-mix(in srgb, var(--bg-canvas) 95%, transparent));
-  --dash-title-grad: linear-gradient(180deg, #f0f9ff 0%, var(--accent) 100%);
-  --dash-pct-grad: linear-gradient(180deg, var(--accent) 0%, var(--ok) 100%);
-  --dash-corner: color-mix(in srgb, var(--accent) 62%, transparent);
+  --dash-shadow: 0 14px 38px rgba(4, 10, 28, 0.36), inset 0 1px 0 var(--dash-sheen);
+  --dash-crest-bg: linear-gradient(135deg, color-mix(in srgb, var(--bg-surface) 84%, var(--accent) 16%), color-mix(in srgb, var(--bg-surface) 82%, #a78bfa 18%));
+  --dash-hud-inner: radial-gradient(circle at 28% 22%, color-mix(in srgb, var(--bg-surface) 88%, var(--accent) 12%), color-mix(in srgb, var(--bg-canvas) 82%, #4c1d95 8%));
+  --dash-title-grad: linear-gradient(110deg, #f8fbff 0%, var(--accent) 52%, #ddd6fe 100%);
+  --dash-pct-grad: linear-gradient(135deg, #f0f9ff 0%, var(--accent) 46%, var(--ok) 100%);
 }
 
 body.bridge-page {
@@ -3138,45 +3240,44 @@ body.bridge-page {
   color: var(--text-primary);
 }
 
+/* 三层慢速呼吸极光云霭背景（空灵柔美，告别工业硬黑底） */
 .cockpit-backdrop {
   position: fixed;
-  inset: 0;
+  inset: -8%;
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(ellipse 68% 48% at 50% 42%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 72%),
-    radial-gradient(ellipse 46% 36% at 14% 88%, color-mix(in srgb, var(--ok) 9%, transparent), transparent 70%),
-    radial-gradient(ellipse 42% 32% at 88% 18%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 68%),
+    radial-gradient(ellipse 56% 46% at 22% 18%, var(--aurora-a), transparent 72%),
+    radial-gradient(ellipse 52% 44% at 78% 24%, var(--aurora-b), transparent 72%),
+    radial-gradient(ellipse 62% 48% at 50% 86%, var(--aurora-c), transparent 74%),
     var(--dash-bg);
+  animation: aurora-breathe 20s ease-in-out infinite alternate;
 }
 
+@keyframes aurora-breathe {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(1.2%, -1%, 0) scale(1.03); }
+  100% { transform: translate3d(-1%, 1.2%, 0) scale(1.015); }
+}
+
+/* 极轻柔星尘微点阵（替代硬朗 CAD 网格线） */
 .cockpit-grid-overlay {
   position: fixed;
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  background-image:
-    linear-gradient(var(--dash-grid-line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--dash-grid-line) 1px, transparent 1px);
-  background-size: 48px 48px;
+  background-image: radial-gradient(circle, var(--dash-star-dot) 1px, transparent 1.2px);
+  background-size: 30px 30px;
+  mask-image: radial-gradient(ellipse 86% 80% at 50% 48%, rgba(0, 0, 0, 0.85), transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 86% 80% at 50% 48%, rgba(0, 0, 0, 0.85), transparent 100%);
 }
 
+/* 去除硬朗工业直角准星 */
 .cockpit-corner {
-  position: fixed;
-  width: 24px;
-  height: 24px;
-  z-index: 25;
-  pointer-events: none;
-  border-color: var(--dash-corner);
-  border-style: solid;
-  border-width: 0;
+  display: none;
 }
-.cockpit-corner.tl { top: 6px; left: 6px; border-top-width: 2px; border-left-width: 2px; }
-.cockpit-corner.tr { top: 6px; right: 6px; border-top-width: 2px; border-right-width: 2px; }
-.cockpit-corner.bl { bottom: 6px; left: 6px; border-bottom-width: 2px; border-left-width: 2px; }
-.cockpit-corner.br { bottom: 6px; right: 6px; border-bottom-width: 2px; border-right-width: 2px; }
 
-/* 54px 三栏悬浮指挥舱桥顶栏 */
+/* 54px 柔光琉璃顶栏 + 底部丝绸流光线 */
 .portal-topbar {
   position: relative;
   z-index: 30;
@@ -3186,15 +3287,28 @@ body.bridge-page {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 10px;
-  padding: 0 16px;
+  padding: 0 18px;
   background: var(--dash-glass-strong);
-  backdrop-filter: blur(14px);
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
   border-bottom: 1px solid var(--dash-border);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.06), inset 0 -1px 0 var(--dash-sheen);
+}
+
+.portal-topbar::after {
+  content: "";
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  bottom: -1px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--accent), #c4b5fd, var(--ok), transparent);
+  opacity: 0.55;
 }
 
 [data-color-scheme="dark"] .portal-topbar {
-  box-shadow: 0 6px 24px rgba(0, 6, 18, 0.45);
+  box-shadow: 0 10px 32px rgba(4, 10, 28, 0.36);
 }
 
 .portal-brand {
@@ -3207,41 +3321,41 @@ body.bridge-page {
 .portal-logo {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   text-decoration: none;
   color: var(--text-primary);
-  font-weight: 800;
+  font-weight: 700;
   font-size: 13px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   white-space: nowrap;
 }
 
 .portal-logo-mark {
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, var(--accent), var(--ok));
+  background: linear-gradient(135deg, var(--accent) 0%, #a78bfa 55%, var(--ok) 100%);
   color: #ffffff;
   font-weight: 800;
   font-size: 13px;
-  box-shadow: 0 0 12px var(--dash-glow);
+  box-shadow: 0 4px 16px var(--dash-glow), inset 0 1px 1px rgba(255, 255, 255, 0.45);
 }
 
 .portal-rate-ctrl {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 
 .dash-select {
-  height: 26px;
-  padding: 0 7px;
-  border-radius: var(--radius-btn);
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 9999px;
   border: 1px solid var(--dash-border);
-  background: var(--bg-subtle);
+  background: color-mix(in srgb, var(--bg-subtle) 72%, transparent);
   color: var(--text-primary);
   font-size: 11px;
   font-weight: 600;
@@ -3249,28 +3363,29 @@ body.bridge-page {
 }
 
 .dash-icon-btn {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border-radius: var(--radius-btn);
+  border-radius: 10px;
   border: 1px solid var(--dash-border);
-  background: var(--bg-subtle);
+  background: color-mix(in srgb, var(--bg-subtle) 72%, transparent);
   color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 140ms ease;
+  transition: all 180ms ease;
 }
 
 .dash-icon-btn:hover {
   color: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--dash-border-strong);
   background: var(--accent-soft);
+  box-shadow: 0 0 14px var(--dash-glow);
 }
 
 .dash-icon-btn.spinning svg {
-  animation: dash-spin 0.8s linear infinite;
+  animation: dash-spin 0.9s linear infinite;
 }
 
 @keyframes dash-spin {
@@ -3282,63 +3397,64 @@ body.bridge-page {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 9999px;
-  background: var(--ok-soft);
-  border: 1px solid color-mix(in srgb, var(--ok) 38%, transparent);
+  background: color-mix(in srgb, var(--ok) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
   color: var(--ok);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   font-family: var(--font-mono);
   white-space: nowrap;
 }
 
 .health-chip.warn {
   background: var(--warn-soft);
-  border-color: color-mix(in srgb, var(--warn) 42%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 36%, transparent);
   color: var(--warn);
 }
 
 .health-chip.danger {
   background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger) 42%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 36%, transparent);
   color: var(--danger);
 }
 
-/* 中央斜角梯形全息指挥冠 */
+/* 中央温润流光云翼徽冠（柔和胶囊 + 渐隐星丝光翼） */
 .bridge-crest {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  padding: 0 14px;
+  padding: 0 12px;
 }
 
 .crest-wing {
-  width: 30px;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--accent));
-  box-shadow: 0 0 8px var(--dash-glow);
+  width: 38px;
+  height: 1.5px;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 65%, #c4b5fd));
+  opacity: 0.72;
 }
 
 .crest-wing.right {
-  background: linear-gradient(90deg, var(--accent), transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ok) 65%, #c4b5fd), transparent);
 }
 
 .crest-plate {
   position: relative;
-  padding: 6px 24px 7px;
+  padding: 6px 24px;
+  border-radius: 9999px;
   background: var(--dash-crest-bg);
   border: 1px solid var(--dash-border-strong);
-  clip-path: polygon(12px 0, calc(100% - 12px) 0, 100% 100%, 0 100%);
-  box-shadow: 0 4px 16px var(--dash-glow);
+  box-shadow: 0 6px 22px var(--dash-glow), inset 0 1px 0 var(--dash-sheen);
 }
 
 .crest-title {
   margin: 0;
-  font-size: 16px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
   white-space: nowrap;
   background: var(--dash-title-grad);
   -webkit-background-clip: text;
@@ -3359,36 +3475,39 @@ body.bridge-page {
   align-items: center;
   gap: 5px;
   height: 28px;
-  padding: 0 10px;
-  border-radius: var(--radius-btn);
+  padding: 0 12px;
+  border-radius: 9999px;
   border: 1px solid var(--dash-border-strong);
-  background: var(--accent-soft);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, #a78bfa 16%, transparent));
   color: var(--accent);
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
   cursor: pointer;
   white-space: nowrap;
-  transition: all 140ms ease;
+  transition: all 180ms ease;
 }
 
 .dash-btn:hover {
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #a78bfa));
   color: var(--accent-contrast);
-  box-shadow: 0 0 12px var(--dash-glow);
+  border-color: transparent;
+  box-shadow: 0 4px 18px var(--dash-glow);
+  transform: translateY(-0.5px);
 }
 
 .dash-btn.subtle {
-  background: var(--bg-subtle);
-  border-color: var(--border-color);
+  background: color-mix(in srgb, var(--bg-subtle) 72%, transparent);
+  border-color: var(--dash-border);
   color: var(--text-primary);
 }
 
 .dash-btn.subtle:hover {
-  border-color: var(--accent);
+  border-color: var(--dash-border-strong);
   color: var(--accent);
   background: var(--accent-soft);
-  box-shadow: none;
+  box-shadow: 0 2px 12px var(--dash-glow);
+  transform: none;
 }
 
 .dash-btn:disabled {
@@ -3397,15 +3516,15 @@ body.bridge-page {
 }
 
 .portal-clock {
-  padding: 3px 9px;
-  border-radius: 5px;
-  background: var(--bg-subtle);
+  padding: 3px 10px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--bg-subtle) 72%, transparent);
   border: 1px solid var(--dash-border);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
   white-space: nowrap;
 }
 
@@ -3416,13 +3535,15 @@ body.bridge-page {
 .portal-topbar .select-ctrl.ctrl-sm {
   height: 28px;
   font-size: 11px;
+  border-radius: 9999px;
 }
 .portal-topbar .conn-status {
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 3px 9px;
+  border-radius: 9999px;
 }
 
-/* 左边缘感应热区与悬浮抽屉左栏（四页共用） */
+/* 左边缘柔光微丝感应热区与琉璃抽屉左栏（四页共用） */
 .sidebar-edge-zone {
   position: fixed;
   left: 0;
@@ -3438,19 +3559,18 @@ body.bridge-page {
 
 .edge-handle {
   width: 3px;
-  height: 52px;
-  margin-left: 2px;
+  height: 54px;
+  margin-left: 3px;
   border-radius: 9999px;
-  background: color-mix(in srgb, var(--accent) 42%, transparent);
-  box-shadow: 0 0 8px var(--dash-glow);
-  opacity: 0.55;
-  transition: opacity 160ms ease, height 160ms ease, background 160ms ease;
+  background: linear-gradient(180deg, transparent, var(--accent), #c4b5fd, transparent);
+  box-shadow: 0 0 12px var(--dash-glow);
+  opacity: 0.62;
+  transition: opacity 200ms ease, height 200ms ease;
 }
 
 .sidebar-edge-zone:hover .edge-handle {
   opacity: 1;
-  height: 76px;
-  background: var(--accent);
+  height: 82px;
 }
 
 .portal-body {
@@ -3459,34 +3579,35 @@ body.bridge-page {
   flex: 1;
   min-height: 0;
   display: flex;
-  padding: 10px 14px 12px;
+  padding: 12px 16px 14px;
 }
 
 .portal-sidebar {
   position: fixed;
-  top: 64px;
-  bottom: 12px;
-  left: 12px;
+  top: 66px;
+  bottom: 14px;
+  left: 14px;
   width: 196px;
   z-index: 42;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   gap: 10px;
-  padding: 10px 8px;
-  border-radius: var(--radius-card);
+  padding: 12px 10px;
+  border-radius: 18px;
   background: var(--dash-glass-strong);
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
   border: 1px solid var(--dash-border-strong);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.24), var(--dash-shadow);
-  transform: translateX(calc(-100% - 20px));
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.16), inset 0 1px 0 var(--dash-sheen);
+  transform: translateX(calc(-100% - 22px));
   opacity: 0;
   pointer-events: none;
-  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease;
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease;
 }
 
 [data-color-scheme="dark"] .portal-sidebar {
-  box-shadow: 0 16px 42px rgba(0, 6, 18, 0.72), 0 0 22px var(--dash-glow);
+  box-shadow: 0 22px 54px rgba(4, 10, 28, 0.62), 0 0 28px var(--dash-glow), inset 0 1px 0 var(--dash-sheen);
 }
 
 .portal-sidebar.open {
@@ -3501,9 +3622,9 @@ body.bridge-page {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 2px 2px 8px;
-  border-bottom: 1px solid var(--border-color);
-  margin-bottom: 2px;
+  padding: 2px 2px 9px;
+  border-bottom: 1px solid var(--dash-border);
+  margin-bottom: 3px;
 }
 
 .sidebar-mode-seg {
@@ -3511,8 +3632,8 @@ body.bridge-page {
   grid-template-columns: 1fr 1fr;
   flex: 1;
   padding: 2px;
-  border-radius: 6px;
-  background: var(--bg-subtle);
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--bg-subtle) 78%, transparent);
   border: 1px solid var(--dash-border);
 }
 
@@ -3520,13 +3641,13 @@ body.bridge-page {
   height: 22px;
   padding: 0 6px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 9999px;
   background: transparent;
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 130ms ease;
+  transition: all 150ms ease;
   white-space: nowrap;
 }
 
@@ -3535,36 +3656,36 @@ body.bridge-page {
 }
 
 .sidebar-mode-btn.active {
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #a78bfa));
   color: var(--accent-contrast);
-  box-shadow: 0 1px 4px var(--dash-glow);
+  box-shadow: 0 2px 10px var(--dash-glow);
 }
 
 .sidebar-hide-btn {
   width: 24px;
   height: 24px;
   padding: 0;
-  border-radius: 5px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-subtle);
+  border-radius: 9999px;
+  border: 1px solid var(--dash-border);
+  background: color-mix(in srgb, var(--bg-subtle) 72%, transparent);
   color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  transition: all 130ms ease;
+  transition: all 150ms ease;
 }
 
 .sidebar-hide-btn:hover {
   color: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--dash-border-strong);
   background: var(--accent-soft);
 }
 
 /* 内嵌模式（docked）：嵌入文档流并排展示，支持隐藏后恢复 100% 满屏 */
 [data-sidebar-mode="docked"][data-sidebar-hidden="0"] .portal-body {
-  gap: 10px;
+  gap: 12px;
 }
 
 [data-sidebar-mode="docked"][data-sidebar-hidden="0"] .portal-sidebar {
@@ -3590,16 +3711,15 @@ body.bridge-page {
   display: none;
 }
 
-/* 悬浮模式手动主动隐藏态：确保平滑退出 */
 [data-sidebar-mode="floating"] .portal-sidebar:not(.open) {
-  transform: translateX(calc(-100% - 20px));
+  transform: translateX(calc(-100% - 22px));
   opacity: 0;
   pointer-events: none;
 }
 
 .dash-icon-btn.active {
   color: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--dash-border-strong);
   background: var(--accent-soft);
 }
 
@@ -3610,10 +3730,10 @@ body.bridge-page {
 }
 
 .portal-nav-title {
-  padding: 6px 10px 3px;
+  padding: 7px 10px 3px;
   font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-tertiary);
 }
@@ -3621,34 +3741,34 @@ body.bridge-page {
 .portal-nav-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 7px;
+  gap: 9px;
+  padding: 8px 11px;
+  border-radius: 12px;
   border: 1px solid transparent;
   color: var(--text-secondary);
   text-decoration: none;
   font-size: 13px;
   font-weight: 600;
-  transition: all 140ms ease;
+  transition: all 160ms ease;
 }
 
 .portal-nav-item:hover {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   border-color: var(--dash-border);
 }
 
 .portal-nav-item.active {
   color: var(--accent);
-  background: var(--accent-soft);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, #a78bfa 14%, transparent));
   border-color: var(--dash-border-strong);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 16%, transparent), inset 0 1px 0 var(--dash-sheen);
 }
 
 .portal-nav-item .nav-arrow {
   margin-left: auto;
   font-size: 11px;
-  opacity: 0.7;
+  opacity: 0.72;
 }
 
 .portal-nav-item .ico {
@@ -3658,9 +3778,9 @@ body.bridge-page {
 }
 
 .sidebar-health {
-  padding: 9px 10px;
-  border-radius: 8px;
-  background: var(--bg-subtle);
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-subtle) 62%, transparent);
   border: 1px solid var(--dash-border);
   display: flex;
   flex-direction: column;
@@ -3682,7 +3802,7 @@ body.bridge-page {
 .health-row strong {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
@@ -3690,34 +3810,77 @@ body.bridge-page {
 .health-row strong.warn { color: var(--warn); }
 .health-row strong.danger { color: var(--danger); }
 
-/* 工作台页面挂载在指挥舱桥壳层下的玻璃通透融合与 100% 满屏布局 */
+/* 工作台页面柔光琉璃化（柔和圆角、轻盈表头与细腻分界，告别硬工业感） */
 body.bridge-page .portal-body > .main-column {
   flex: 1;
   min-width: 0;
   min-height: 0;
   height: 100%;
   padding: 0;
-  gap: 10px;
+  gap: 11px;
   background: transparent;
 }
 
 body.bridge-page .metric-strip {
+  border-radius: 14px;
   background: var(--dash-glass);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
   border: 1px solid var(--dash-border);
   box-shadow: var(--dash-shadow);
 }
 
 body.bridge-page .panel {
+  border-radius: 16px;
   background: var(--dash-glass);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
   border: 1px solid var(--dash-border);
   box-shadow: var(--dash-shadow);
 }
 
+body.bridge-page .toolbar {
+  border-bottom: 1px solid var(--dash-border);
+}
+
+body.bridge-page .data-table th {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-subtle) 82%, transparent), color-mix(in srgb, var(--bg-surface) 76%, transparent));
+  border-bottom: 1px solid var(--dash-border);
+}
+
+body.bridge-page .btn {
+  border-radius: 10px;
+}
+
+body.bridge-page .btn.primary {
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #a78bfa));
+  border-color: transparent;
+  box-shadow: 0 4px 14px var(--dash-glow);
+}
+
+body.bridge-page .ctrl,
+body.bridge-page .select-ctrl {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-subtle) 68%, transparent);
+  border-color: var(--dash-border);
+}
+
+body.bridge-page .theme-menu {
+  border-radius: 16px;
+  background: var(--dash-glass-strong);
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid var(--dash-border-strong);
+  box-shadow: 0 20px 52px rgba(8, 14, 38, 0.34), inset 0 1px 0 var(--dash-sheen);
+}
+
 body.bridge-page .drawer,
 body.bridge-page .modal {
+  border-radius: 18px;
   border-color: var(--dash-border-strong);
+  background: var(--dash-glass-strong);
+  backdrop-filter: blur(24px) saturate(145%);
+  -webkit-backdrop-filter: blur(24px) saturate(145%);
 }
 
 @media (max-width: 1180px) {

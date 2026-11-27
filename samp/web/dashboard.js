@@ -302,7 +302,8 @@
     });
 
     svg.setAttribute("viewBox", `0 0 ${sRect.width} ${sRect.height}`);
-    svg.innerHTML = paths.join("");
+    const defs = `<defs><filter id="silk-glow" x="-25%" y="-25%" width="150%" height="150%"><feGaussianBlur stdDeviation="2.4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>`;
+    svg.innerHTML = defs + paths.join("");
   }
 
   /* ===================== 近 50 次耗时与写入吞吐 Canvas 趋势图 ===================== */

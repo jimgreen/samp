@@ -26,12 +26,14 @@ const ICONS = {
 };
 
 const THEME_SWATCHES = {
+  "cloud-lotus": { key: "theme.lotus", bg: "#F4F7FF", accent: "#7C6BF6", group: "light" },
   "minimalist-light": { key: "theme.light", bg: "#F4F6F8", accent: "#2563EB", group: "light" },
   "arctic-frost": { key: "theme.arctic", bg: "#F0F6FB", accent: "#0284C7", group: "light" },
   "warm-paper": { key: "theme.warm", bg: "#F6F2E9", accent: "#15803D", group: "light" },
   "slate-daylight": { key: "theme.slate", bg: "#EDF1F5", accent: "#1D4ED8", group: "light" },
   "bento-grid": { key: "theme.bento", bg: "#F5F5F7", accent: "#0071E3", group: "light" },
   editorial: { key: "theme.editorial", bg: "#FAF9F6", accent: "#9F1239", group: "light" },
+  "ethereal-aurora": { key: "theme.aurora", bg: "#0C1126", accent: "#7DD3FC", group: "dark" },
   "precision-dark": { key: "theme.dark", bg: "#0B0F19", accent: "#38BDF8", group: "dark" },
   "ocean-slate": { key: "theme.ocean", bg: "#071422", accent: "#38BDF8", group: "dark" },
   "nord-dark": { key: "theme.nord", bg: "#242933", accent: "#88C0D0", group: "dark" },
@@ -192,11 +194,11 @@ function initThemePicker(themeSelect, langSelect) {
 
 function getTheme() {
   const saved = localStorage.getItem(THEME_STORAGE_KEY);
-  return SUPPORTED_THEMES.includes(saved) ? saved : "minimalist-light";
+  return SUPPORTED_THEMES.includes(saved) ? saved : "ethereal-aurora";
 }
 
 function applyTheme(theme) {
-  const target = SUPPORTED_THEMES.includes(theme) ? theme : "minimalist-light";
+  const target = SUPPORTED_THEMES.includes(theme) ? theme : "ethereal-aurora";
   document.documentElement.setAttribute("data-theme", target);
   document.documentElement.setAttribute("data-color-scheme", DARK_THEMES.has(target) ? "dark" : "light");
   localStorage.setItem(THEME_STORAGE_KEY, target);

@@ -7,9 +7,9 @@
   <script>
     (function(){
       var t = localStorage.getItem("samp_theme");
-      var ok = ["minimalist-light","arctic-frost","warm-paper","slate-daylight","bento-grid","editorial","precision-dark","ocean-slate","nord-dark","industrial-amber","glassmorphism","sci-fi-cyan","sci-fi-purple","sci-fi-matrix"];
-      var dark = ["precision-dark","ocean-slate","nord-dark","industrial-amber","glassmorphism","sci-fi-cyan","sci-fi-purple","sci-fi-matrix"];
-      var theme = ok.indexOf(t) >= 0 ? t : "minimalist-light";
+      var ok = ["cloud-lotus","minimalist-light","arctic-frost","warm-paper","slate-daylight","bento-grid","editorial","ethereal-aurora","precision-dark","ocean-slate","nord-dark","industrial-amber","glassmorphism","sci-fi-cyan","sci-fi-purple","sci-fi-matrix"];
+      var dark = ["ethereal-aurora","precision-dark","ocean-slate","nord-dark","industrial-amber","glassmorphism","sci-fi-cyan","sci-fi-purple","sci-fi-matrix"];
+      var theme = ok.indexOf(t) >= 0 ? t : "ethereal-aurora";
       document.documentElement.setAttribute("data-theme", theme);
       document.documentElement.setAttribute("data-color-scheme", dark.indexOf(theme) >= 0 ? "dark" : "light");
       var sm = localStorage.getItem("samp_sidebar_mode") === "docked" ? "docked" : "floating";
@@ -57,12 +57,14 @@
       <span id="dash-clock" class="portal-clock">00:00:00</span>
       <div class="ui-global-controls">
         <select id="theme-select" class="select-ctrl ctrl-sm" data-i18n-title="theme.toggle">
+          <option value="cloud-lotus" data-i18n="theme.lotus">仙境 · 云岚晨露</option>
           <option value="minimalist-light" data-i18n="theme.light">极简明亮</option>
           <option value="arctic-frost" data-i18n="theme.arctic">极地冰蓝</option>
           <option value="warm-paper" data-i18n="theme.warm">护眼暖纸</option>
           <option value="slate-daylight" data-i18n="theme.slate">冷灰工程</option>
           <option value="bento-grid" data-i18n="theme.bento">便当盒网格</option>
           <option value="editorial" data-i18n="theme.editorial">编辑杂志</option>
+          <option value="ethereal-aurora" data-i18n="theme.aurora">仙境 · 星雾极光</option>
           <option value="precision-dark" data-i18n="theme.dark">精密暗黑</option>
           <option value="ocean-slate" data-i18n="theme.ocean">深海工业蓝</option>
           <option value="nord-dark" data-i18n="theme.nord">北欧极夜</option>
