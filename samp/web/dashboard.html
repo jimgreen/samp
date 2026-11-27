@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="minimalist-light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>大屏主画面 - SAMP</title>
+  <script>
+    (function(){
+      var t = localStorage.getItem("samp_theme");
+      var ok = ["minimalist-light","arctic-frost","warm-paper","slate-daylight","bento-grid","editorial","precision-dark","ocean-slate","nord-dark","industrial-amber","glassmorphism","sci-fi-cyan","sci-fi-purple","sci-fi-matrix"];
+      var dark = ["precision-dark","ocean-slate","nord-dark","industrial-amber","glassmorphism","sci-fi-cyan","sci-fi-purple","sci-fi-matrix"];
+      var theme = ok.indexOf(t) >= 0 ? t : "minimalist-light";
+      document.documentElement.setAttribute("data-theme", theme);
+      document.documentElement.setAttribute("data-color-scheme", dark.indexOf(theme) >= 0 ? "dark" : "light");
+      var sm = localStorage.getItem("samp_sidebar_mode") === "docked" ? "docked" : "floating";
+      var sh = sm === "docked" && localStorage.getItem("samp_sidebar_hidden") === "1" ? "1" : "0";
+      document.documentElement.setAttribute("data-sidebar-mode", sm);
+      document.documentElement.setAttribute("data-sidebar-hidden", sh);
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/samp.css">
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body class="bridge-page dash-body" data-title-key="page.title.dashboard">
+  <!-- 全屏态势氛围层与四角 HUD 准星 -->
+  <div class="cockpit-backdrop" aria-hidden="true"></div>
+  <div class="cockpit-grid-overlay" aria-hidden="true"></div>
+  <div class="cockpit-corner tl" aria-hidden="true"></div>
+  <div class="cockpit-corner tr" aria-hidden="true"></div>
+  <div class="cockpit-corner bl" aria-hidden="true"></div>
+  <div class="cockpit-corner br" aria-hidden="true"></div>
+
+  <!-- 三栏悬浮式指挥舱桥顶栏 -->
+  <header class="portal-topbar">
+    <div id="top-progress" class="top-progress"></div>
+
+    <div class="portal-brand">
+      <button type="button" id="btn-sidebar-toggle" class="dash-icon-btn" data-i18n-title="sidebar.toggle">
+        <svg class="ico ico-xs" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+      </button>
+      <a class="portal-logo" href="/dashboard">
+        <span class="portal-logo-mark">S</span>
+        <span>SAMP BRIDGE</span>
+      </a>
+      <div class="portal-rate-ctrl">
+        <select id="dash-refresh-rate" class="dash-select" aria-label="refresh">
+          <option value="2000" data-i18n="dash.rate_2s">2s</option>
+          <option value="5000" selected data-i18n="dash.rate_5s">5s</option>
+          <option value="10000" data-i18n="dash.rate_10s">10s</option>
+          <option value="0" data-i18n="dash.rate_off">暂停</option>
+        </select>
+        <button type="button" id="btn-dash-refresh" class="dash-icon-btn" data-i18n-title="dash.refresh_now">
+          <svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        </button>
+      </div>
+      <span id="web-conn-status" class="conn-status" data-i18n="conn.checking">连接检查中</span>
+      <span id="dash-health-chip" class="health-chip">--%</span>
+    </div>
+
+    <div class="bridge-crest">
+      <span class="crest-wing" aria-hidden="true"></span>
+      <div class="crest-plate">
+        <h1 class="crest-title" data-i18n="dash.crest_title">SAMP 智能采样监控大屏</h1>
+      </div>
+      <span class="crest-wing right" aria-hidden="true"></span>
+    </div>
+
+    <div class="portal-right">
+      <button type="button" id="alarm-pill" class="alarm-pill hidden"></button>
+      <button type="button" id="btn-dash-sample-all" class="dash-btn">
+        <svg class="ico ico-xs" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+        <span data-i18n="dash.sample_all">全部采样</span>
+      </button>
+      <a class="dash-btn subtle" href="/definitions" data-i18n="dash.workspace_btn">工程配置 ↗</a>
+      <span id="dash-clock" class="portal-clock">00:00:00</span>
+      <div class="ui-global-controls">
+        <select id="theme-select" class="select-ctrl ctrl-sm" data-i18n-title="theme.toggle">
+          <option value="minimalist-light" data-i18n="theme.light">极简明亮</option>
+          <option value="arctic-frost" data-i18n="theme.arctic">极地冰蓝</option>
+          <option value="warm-paper" data-i18n="theme.warm">护眼暖纸</option>
+          <option value="slate-daylight" data-i18n="theme.slate">冷灰工程</option>
+          <option value="bento-grid" data-i18n="theme.bento">便当盒网格</option>
+          <option value="editorial" data-i18n="theme.editorial">编辑杂志</option>
+          <option value="precision-dark" data-i18n="theme.dark">精密暗黑</option>
+          <option value="ocean-slate" data-i18n="theme.ocean">深海工业蓝</option>
+          <option value="nord-dark" data-i18n="theme.nord">北欧极夜</option>
+          <option value="industrial-amber" data-i18n="theme.amber">碳黑琥珀</option>
+          <option value="glassmorphism" data-i18n="theme.glass">毛玻璃拟态</option>
+          <option value="sci-fi-cyan" data-i18n="theme.cyan">科幻 · 电光青</option>
+          <option value="sci-fi-purple" data-i18n="theme.purple">科幻 · 赛博紫</option>
+          <option value="sci-fi-matrix" data-i18n="theme.matrix">科幻 · 矩阵绿</option>
+        </select>
+        <select id="lang-select" class="select-ctrl ctrl-sm" data-i18n-title="lang.label">
+          <option value="zh-CN">中文</option>
+          <option value="en-US">English</option>
+          <option value="ru-RU">Русский</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <!-- 左侧边缘悬浮感应热区（默认隐藏左栏，鼠标移至左边缘滑出） -->
+  <div class="sidebar-edge-zone" id="sidebar-edge-zone" aria-hidden="true">
+    <span class="edge-handle"></span>
+  </div>
+
+  <!-- 主体全屏容器 -->
+  <div class="portal-body">
+    <!-- 左侧悬浮导航栏 + 运行健康卡（默认收起，左边缘触发滑出） -->
+    <aside class="portal-sidebar" id="portal-sidebar">
+      <div class="portal-nav-group">
+        <div class="sidebar-controls">
+          <div class="sidebar-mode-seg" role="group">
+            <button type="button" class="sidebar-mode-btn active" data-sidebar-mode-btn="floating" data-i18n="sidebar.mode_floating">悬浮</button>
+            <button type="button" class="sidebar-mode-btn" data-sidebar-mode-btn="docked" data-i18n="sidebar.mode_docked">内嵌</button>
+          </div>
+          <button type="button" id="btn-sidebar-hide" class="sidebar-hide-btn" data-i18n-title="sidebar.hide">
+            <svg class="ico ico-xs" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+        </div>
+        <div class="portal-nav-title" data-i18n="nav.group_overview">态势总览</div>
+        <a class="portal-nav-item active" href="/dashboard">
+          <svg class="ico" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
+          <span data-i18n="nav.dashboard">大屏主画面</span>
+          <span class="nav-arrow">▸</span>
+        </a>
+        <div class="portal-nav-title" data-i18n="nav.group_config">采样配置</div>
+        <a class="portal-nav-item" href="/definitions">
+          <svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg>
+          <span data-i18n="nav.definitions">采样定义</span>
+        </a>
+        <div class="portal-nav-title" data-i18n="nav.group_monitor">监控与分析</div>
+        <a class="portal-nav-item" href="/runtime">
+          <svg class="ico" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          <span data-i18n="nav.runtime">运行监控</span>
+        </a>
+        <a class="portal-nav-item" href="/query">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+          <span data-i18n="nav.query">采样查询</span>
+        </a>
+      </div>
+
+      <div class="sidebar-health">
+        <div class="health-row">
+          <span data-i18n="dash.side_sched">调度</span>
+          <strong id="side-sched">—</strong>
+        </div>
+        <div class="health-row">
+          <span data-i18n="dash.side_enabled">启用</span>
+          <strong id="side-enabled">—</strong>
+        </div>
+        <div class="health-row">
+          <span data-i18n="dash.side_dbs">结果库</span>
+          <strong id="side-dbs">—</strong>
+        </div>
+        <div class="health-row">
+          <span data-i18n="dash.side_size">占用</span>
+          <strong id="side-size">—</strong>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 右侧一屏全景态势主区 -->
+    <main class="portal-main">
+      <!-- 上段：5 联核心 KPI 卡片条 -->
+      <section class="hero-kpi-strip">
+        <div class="kpi-card">
+          <div class="kpi-icon">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-label" data-i18n="dash.kpi_defs">采样定义</div>
+            <div class="kpi-val"><strong id="kpi-defs-val">0 / 0</strong><span data-i18n="dash.kpi_defs_sub">启用 / 总数</span></div>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-icon ok">
+            <svg viewBox="0 0 24 24"><path d="M4 19h16"/><path d="M6 15l4-5 4 3 4-7"/></svg>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-label" data-i18n="dash.kpi_rows">累计写入</div>
+            <div class="kpi-val"><strong id="kpi-rows-val" class="ok">0</strong><span data-i18n="dash.kpi_rows_unit">行</span></div>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-icon">
+            <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-label" data-i18n="dash.kpi_dbs">结果库</div>
+            <div class="kpi-val"><strong id="kpi-dbs-val">0</strong><span id="kpi-dbs-sub">—</span></div>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-icon warn">
+            <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-label" data-i18n="dash.kpi_size">存储占用</div>
+            <div class="kpi-val"><strong id="kpi-size-val">0 B</strong><span id="kpi-size-sub">SQLite</span></div>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-icon ok">
+            <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-label" data-i18n="dash.kpi_runs">调度执行</div>
+            <div class="kpi-val"><strong id="kpi-runs-val">0 / 0</strong><span data-i18n="dash.kpi_runs_sub">成功 / 失败</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 中段：动态采样流拓扑大舞台 -->
+      <section class="hero-stage" id="hero-stage">
+        <div class="hero-root-badge">
+          <span class="env-chip"><span data-i18n="metric.root_dir">根目录</span><strong id="dash-root-tag" title="">—</strong></span>
+        </div>
+        <div class="hero-env-badges">
+          <span class="env-chip"><span data-i18n="dash.chip_workers">并发</span><strong id="chip-workers">—</strong></span>
+          <span class="env-chip"><span data-i18n="dash.chip_align">对齐</span><strong id="chip-align">—</strong></span>
+          <span class="env-chip"><span data-i18n="dash.chip_next">下次</span><strong id="chip-next">—</strong></span>
+        </div>
+
+        <svg class="hero-flow-svg" id="hero-flow-svg" aria-hidden="true"></svg>
+
+        <!-- 左 3 启动通道节点 -->
+        <div class="hero-col hero-col-left">
+          <a class="topo-node" id="node-periodic" href="/definitions">
+            <span class="node-icon">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
+            </span>
+            <span class="node-meta">
+              <span class="node-name" data-i18n="dash.node_periodic">周期采样</span>
+              <span class="node-sub" id="sub-periodic">—</span>
+            </span>
+            <span class="node-metric">
+              <strong class="node-val" id="val-periodic">0</strong>
+              <span class="node-unit" data-i18n="dash.unit_pts">点</span>
+            </span>
+          </a>
+
+          <a class="topo-node" id="node-fixed" href="/definitions">
+            <span class="node-icon ok">
+              <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            </span>
+            <span class="node-meta">
+              <span class="node-name" data-i18n="dash.node_fixed">定点采样</span>
+              <span class="node-sub" id="sub-fixed">—</span>
+            </span>
+            <span class="node-metric">
+              <strong class="node-val ok" id="val-fixed">0</strong>
+              <span class="node-unit" data-i18n="dash.unit_pts">点</span>
+            </span>
+          </a>
+
+          <a class="topo-node" id="node-trigger" href="/definitions">
+            <span class="node-icon warn">
+              <svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            </span>
+            <span class="node-meta">
+              <span class="node-name" data-i18n="dash.node_trigger">触发采样</span>
+              <span class="node-sub" id="sub-trigger">标志/API</span>
+            </span>
+            <span class="node-metric">
+              <strong class="node-val" id="val-trigger">0</strong>
+              <span class="node-unit" data-i18n="dash.unit_pts">点</span>
+            </span>
+          </a>
+        </div>
+
+        <!-- 中央全息八角焦点 -->
+        <div class="hero-center-hud" id="hero-center-hud">
+          <div class="hud-frame">
+            <svg class="hud-gauge" viewBox="0 0 120 120">
+              <defs>
+                <linearGradient id="hud-arc-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="var(--accent)"/>
+                  <stop offset="100%" stop-color="var(--ok)"/>
+                </linearGradient>
+              </defs>
+              <circle class="hud-radar-ring" cx="60" cy="60" r="54" fill="none" stroke="var(--accent)" stroke-opacity="0.32" stroke-width="1.5" stroke-dasharray="4 6"/>
+              <circle cx="60" cy="60" r="44" fill="none" stroke="var(--border-color)" stroke-opacity="0.55" stroke-width="9"/>
+              <circle id="hud-gauge-arc" cx="60" cy="60" r="44" fill="none" stroke="url(#hud-arc-grad)" stroke-width="9" stroke-linecap="round"
+                      stroke-dasharray="276.46" stroke-dashoffset="276.46" transform="rotate(-90 60 60)"/>
+              <circle cx="60" cy="60" r="30" fill="none" stroke="var(--accent)" stroke-opacity="0.24" stroke-width="1"/>
+            </svg>
+            <div class="hud-readout">
+              <div class="hud-title" data-i18n="dash.center_title">采样成功率</div>
+              <div class="hud-pct"><strong id="hud-rate-val">--</strong><span>%</span></div>
+              <div class="hud-sub" id="hud-rate-sub">—</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右 3 数据链路节点 -->
+        <div class="hero-col hero-col-right">
+          <a class="topo-node" id="node-source" href="/definitions">
+            <span class="node-icon">
+              <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/></svg>
+            </span>
+            <span class="node-meta">
+              <span class="node-name" data-i18n="dash.node_source">源数据库</span>
+              <span class="node-sub" id="sub-source">SQLite</span>
+            </span>
+            <span class="node-metric">
+              <strong class="node-val" id="val-source">0</strong>
+              <span class="node-unit" data-i18n="dash.unit_dbs">库</span>
+            </span>
+          </a>
+
+          <a class="topo-node ok-state" id="node-result" href="/runtime#storage">
+            <span class="node-icon ok">
+              <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+            </span>
+            <span class="node-meta">
+              <span class="node-name" data-i18n="dash.node_result">结果库</span>
+              <span class="node-sub" id="sub-result">—</span>
+            </span>
+            <span class="node-metric">
+              <strong class="node-val ok" id="val-result">0</strong>
+              <span class="node-unit" data-i18n="dash.unit_dbs">库</span>
+            </span>
+          </a>
+
+          <a class="topo-node" id="node-fault" href="/runtime">
+            <span class="node-icon" id="icon-fault">
+              <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </span>
+            <span class="node-meta">
+              <span class="node-name" data-i18n="dash.node_fault">异常告警</span>
+              <span class="node-sub" id="sub-fault">—</span>
+            </span>
+            <span class="node-metric">
+              <strong class="node-val" id="val-fault">0</strong>
+              <span class="node-unit" data-i18n="dash.unit_items">项</span>
+            </span>
+          </a>
+        </div>
+      </section>
+
+      <!-- 下段：双联实时态势面板 -->
+      <section class="dash-bottom-grid">
+        <div class="dash-panel">
+          <div class="dash-panel-head">
+            <span class="dash-panel-title" data-i18n="dash.panel_trend">采集耗时与写入趋势</span>
+            <div class="trend-legend">
+              <span class="legend-item"><span class="legend-dot ms"></span><span data-i18n="dash.legend_ms">耗时 ms</span></span>
+              <span class="legend-item"><span class="legend-dot rows"></span><span data-i18n="dash.legend_rows">写入行</span></span>
+            </div>
+          </div>
+          <div class="trend-canvas-wrap">
+            <canvas id="dash-trend-canvas"></canvas>
+          </div>
+        </div>
+
+        <div class="dash-panel">
+          <div class="dash-panel-head">
+            <div class="dash-tabs" role="tablist">
+              <button type="button" class="dash-tab active" data-feed-tab="logs" data-i18n="dash.tab_logs">实时流水</button>
+              <button type="button" class="dash-tab" data-feed-tab="hot" data-i18n="dash.tab_hot">热点采样点</button>
+              <button type="button" class="dash-tab" data-feed-tab="storage" data-i18n="dash.tab_storage">存储 Top</button>
+            </div>
+            <span id="dash-feed-count" class="feed-time">0</span>
+          </div>
+          <div class="feed-list" id="dash-feed-list"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/static/i18n.js"></script>
+  <script src="/static/common.js"></script>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

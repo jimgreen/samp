@@ -12,69 +12,128 @@
       var theme = ok.indexOf(t) >= 0 ? t : "minimalist-light";
       document.documentElement.setAttribute("data-theme", theme);
       document.documentElement.setAttribute("data-color-scheme", dark.indexOf(theme) >= 0 ? "dark" : "light");
+      var sm = localStorage.getItem("samp_sidebar_mode") === "docked" ? "docked" : "floating";
+      var sh = sm === "docked" && localStorage.getItem("samp_sidebar_hidden") === "1" ? "1" : "0";
+      document.documentElement.setAttribute("data-sidebar-mode", sm);
+      document.documentElement.setAttribute("data-sidebar-hidden", sh);
     })();
   </script>
   <link rel="stylesheet" href="/static/samp.css">
 </head>
-<body data-title-key="page.title.definitions">
-<header class="topbar">
-  <div class="topbar-left">
-    <button type="button" class="btn ghost xs icon-only" id="btn-sidebar-toggle" data-sidebar-toggle data-i18n-title="sidebar.toggle">
-      <svg class="ico" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
-    </button>
-    <a class="brand" href="/definitions"><span class="brand-mark">S</span><span>SAMP</span></a>
-    <span class="page-heading" data-i18n="nav.definitions">采样定义</span>
-  </div>
-  <div class="topbar-right">
-    <span id="web-conn-status" class="conn-status" data-i18n="conn.checking">连接检查中</span>
-    <button type="button" id="alarm-pill" class="alarm-pill hidden"></button>
-    <a class="topbar-link" href="/docs" target="_blank" rel="noopener" data-i18n="nav.api_docs">接口文档 ↗</a>
-    <div class="ui-global-controls">
-      <select id="theme-select" class="select-ctrl ctrl-sm" data-i18n-title="theme.toggle">
-        <option value="minimalist-light" data-i18n="theme.light">极简明亮</option>
-        <option value="arctic-frost" data-i18n="theme.arctic">极地冰蓝</option>
-        <option value="warm-paper" data-i18n="theme.warm">护眼暖纸</option>
-        <option value="slate-daylight" data-i18n="theme.slate">冷灰工程</option>
-        <option value="bento-grid" data-i18n="theme.bento">便当盒网格</option>
-        <option value="editorial" data-i18n="theme.editorial">编辑杂志</option>
-        <option value="precision-dark" data-i18n="theme.dark">精密暗黑</option>
-        <option value="ocean-slate" data-i18n="theme.ocean">深海工业蓝</option>
-        <option value="nord-dark" data-i18n="theme.nord">北欧极夜</option>
-        <option value="industrial-amber" data-i18n="theme.amber">碳黑琥珀</option>
-        <option value="glassmorphism" data-i18n="theme.glass">毛玻璃拟态</option>
-        <option value="sci-fi-cyan" data-i18n="theme.cyan">科幻 · 电光青</option>
-        <option value="sci-fi-purple" data-i18n="theme.purple">科幻 · 赛博紫</option>
-        <option value="sci-fi-matrix" data-i18n="theme.matrix">科幻 · 矩阵绿</option>
-      </select>
-      <select id="lang-select" class="select-ctrl ctrl-sm" data-i18n-title="lang.label">
-        <option value="zh-CN">中文</option>
-        <option value="en-US">English</option>
-        <option value="ru-RU">Русский</option>
-      </select>
-    </div>
-  </div>
-</header>
+<body class="bridge-page" data-title-key="page.title.definitions">
+  <div class="cockpit-backdrop" aria-hidden="true"></div>
+  <div class="cockpit-grid-overlay" aria-hidden="true"></div>
+  <div class="cockpit-corner tl" aria-hidden="true"></div>
+  <div class="cockpit-corner tr" aria-hidden="true"></div>
+  <div class="cockpit-corner bl" aria-hidden="true"></div>
+  <div class="cockpit-corner br" aria-hidden="true"></div>
 
-<div class="app-shell" id="app-shell">
-  <aside class="sidebar">
-    <div class="side-title" data-i18n="nav.group_config">采样配置</div>
-    <nav class="sidebar-nav">
-      <a class="active" href="/definitions" data-i18n-title="nav.definitions">
-        <svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg>
-        <span data-i18n="nav.definitions">采样定义</span>
+  <header class="portal-topbar">
+    <div id="top-progress" class="top-progress"></div>
+
+    <div class="portal-brand">
+      <button type="button" id="btn-sidebar-toggle" class="dash-icon-btn" data-i18n-title="sidebar.toggle">
+        <svg class="ico ico-xs" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+      </button>
+      <a class="portal-logo" href="/dashboard">
+        <span class="portal-logo-mark">S</span>
+        <span>SAMP BRIDGE</span>
       </a>
-      <div class="side-title" data-i18n="nav.group_monitor">监控与分析</div>
-      <a href="/runtime" data-i18n-title="nav.runtime">
-        <svg class="ico" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        <span data-i18n="nav.runtime">运行监控</span>
-      </a>
-      <a href="/query" data-i18n-title="nav.query">
-        <svg class="ico" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
-        <span data-i18n="nav.query">采样查询</span>
-      </a>
-    </nav>
-  </aside>
-  <div class="sidebar-resizer" id="sidebar-resizer" data-i18n-title="sidebar.resize"></div>
+      <span id="web-conn-status" class="conn-status" data-i18n="conn.checking">连接检查中</span>
+    </div>
+
+    <div class="bridge-crest">
+      <span class="crest-wing" aria-hidden="true"></span>
+      <div class="crest-plate">
+        <h1 class="crest-title" data-i18n="dash.crest_definitions">SAMP 采样定义工作台</h1>
+      </div>
+      <span class="crest-wing right" aria-hidden="true"></span>
+    </div>
+
+    <div class="portal-right">
+      <button type="button" id="alarm-pill" class="alarm-pill hidden"></button>
+      <a class="dash-btn subtle" href="/dashboard" data-i18n="nav.dashboard">大屏主画面</a>
+      <a class="dash-btn subtle" href="/docs" target="_blank" rel="noopener" data-i18n="nav.api_docs">接口文档 ↗</a>
+      <span id="dash-clock" class="portal-clock">00:00:00</span>
+      <div class="ui-global-controls">
+        <select id="theme-select" class="select-ctrl ctrl-sm" data-i18n-title="theme.toggle">
+          <option value="minimalist-light" data-i18n="theme.light">极简明亮</option>
+          <option value="arctic-frost" data-i18n="theme.arctic">极地冰蓝</option>
+          <option value="warm-paper" data-i18n="theme.warm">护眼暖纸</option>
+          <option value="slate-daylight" data-i18n="theme.slate">冷灰工程</option>
+          <option value="bento-grid" data-i18n="theme.bento">便当盒网格</option>
+          <option value="editorial" data-i18n="theme.editorial">编辑杂志</option>
+          <option value="precision-dark" data-i18n="theme.dark">精密暗黑</option>
+          <option value="ocean-slate" data-i18n="theme.ocean">深海工业蓝</option>
+          <option value="nord-dark" data-i18n="theme.nord">北欧极夜</option>
+          <option value="industrial-amber" data-i18n="theme.amber">碳黑琥珀</option>
+          <option value="glassmorphism" data-i18n="theme.glass">毛玻璃拟态</option>
+          <option value="sci-fi-cyan" data-i18n="theme.cyan">科幻 · 电光青</option>
+          <option value="sci-fi-purple" data-i18n="theme.purple">科幻 · 赛博紫</option>
+          <option value="sci-fi-matrix" data-i18n="theme.matrix">科幻 · 矩阵绿</option>
+        </select>
+        <select id="lang-select" class="select-ctrl ctrl-sm" data-i18n-title="lang.label">
+          <option value="zh-CN">中文</option>
+          <option value="en-US">English</option>
+          <option value="ru-RU">Русский</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <div class="sidebar-edge-zone" id="sidebar-edge-zone" aria-hidden="true">
+    <span class="edge-handle"></span>
+  </div>
+
+  <div class="portal-body" id="app-shell">
+    <aside class="portal-sidebar" id="portal-sidebar">
+      <div class="portal-nav-group">
+        <div class="sidebar-controls">
+          <div class="sidebar-mode-seg" role="group">
+            <button type="button" class="sidebar-mode-btn active" data-sidebar-mode-btn="floating" data-i18n="sidebar.mode_floating">悬浮</button>
+            <button type="button" class="sidebar-mode-btn" data-sidebar-mode-btn="docked" data-i18n="sidebar.mode_docked">内嵌</button>
+          </div>
+          <button type="button" id="btn-sidebar-hide" class="sidebar-hide-btn" data-i18n-title="sidebar.hide">
+            <svg class="ico ico-xs" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+        </div>
+        <div class="portal-nav-title" data-i18n="nav.group_overview">态势总览</div>
+        <a class="portal-nav-item" href="/dashboard">
+          <svg class="ico" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
+          <span data-i18n="nav.dashboard">大屏主画面</span>
+        </a>
+        <div class="portal-nav-title" data-i18n="nav.group_config">采样配置</div>
+        <a class="portal-nav-item active" href="/definitions">
+          <svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg>
+          <span data-i18n="nav.definitions">采样定义</span>
+          <span class="nav-arrow">▸</span>
+        </a>
+        <div class="portal-nav-title" data-i18n="nav.group_monitor">监控与分析</div>
+        <a class="portal-nav-item" href="/runtime">
+          <svg class="ico" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          <span data-i18n="nav.runtime">运行监控</span>
+        </a>
+        <a class="portal-nav-item" href="/query">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+          <span data-i18n="nav.query">采样查询</span>
+        </a>
+      </div>
+
+      <div class="sidebar-health">
+        <div class="health-row">
+          <span data-i18n="dash.side_sched">调度</span>
+          <strong id="side-sched">—</strong>
+        </div>
+        <div class="health-row">
+          <span data-i18n="dash.side_enabled">启用</span>
+          <strong id="side-enabled">—</strong>
+        </div>
+        <div class="health-row">
+          <span data-i18n="dash.side_dbs">结果库</span>
+          <strong id="side-dbs">—</strong>
+        </div>
+      </div>
+    </aside>
 
   <div class="main-column">
 

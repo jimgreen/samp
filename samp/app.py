@@ -830,7 +830,11 @@ def create_app(
 
     @app.get("/", include_in_schema=False)
     def home():
-        return RedirectResponse("/definitions")
+        return RedirectResponse("/dashboard")
+
+    @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
+    def dashboard_page():
+        return render_page("dashboard.html")
 
     @app.get("/definitions", response_class=HTMLResponse, include_in_schema=False)
     def definitions_page():

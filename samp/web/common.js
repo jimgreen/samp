@@ -400,6 +400,177 @@ function initSidebar() {
   }
 }
 
+/* ===================== 全站统一左栏双模式（悬浮/内嵌 + 均可隐藏）与指挥舱桥时钟 ===================== */
+const SIDEBAR_MODE_KEY = "samp_sidebar_mode";
+const SIDEBAR_HIDDEN_KEY = "samp_sidebar_hidden";
+
+function initPortalSidebar() {
+  const sidebar = $("portal-sidebar");
+  const edge = $("sidebar-edge-zone");
+  if (!sidebar || sidebar.dataset.portalBound) return;
+  sidebar.dataset.portalBound = "1";
+
+  const root = document.documentElement;
+  const toggleBtn = $("btn-sidebar-toggle");
+  const hideBtn = $("btn-sidebar-hide");
+  const modeButtons = [...sidebar.querySelectorAll("[data-sidebar-mode-btn]")];
+
+  const getMode = () => (localStorage.getItem(SIDEBAR_MODE_KEY) === "docked" ? "docked" : "floating");
+  const getDockedHidden = () => localStorage.getItem(SIDEBAR_HIDDEN_KEY) === "1";
+
+  let hideTimer = null;
+  let suppressUntil = 0;
+
+  const cancelHide = () => {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+  };
+
+  const notifyLayoutResize = () => {
+    requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    setTimeout(() => window.dispatchEvent(new Event("resize")), 220);
+  };
+
+  const syncUI = () => {
+    const mode = getMode();
+    const hidden = mode === "docked" ? getDockedHidden() : !sidebar.classList.contains("open");
+    root.setAttribute("data-sidebar-mode", mode);
+    root.setAttribute("data-sidebar-hidden", mode === "docked" && hidden ? "1" : "0");
+    modeButtons.forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.sidebarModeBtn === mode);
+    });
+    if (toggleBtn) {
+      toggleBtn.classList.toggle("active", !hidden);
+    }
+  };
+
+  const openFloating = () => {
+    if (getMode() !== "floating") return;
+    if (Date.now() < suppressUntil) return;
+    cancelHide();
+    if (!sidebar.classList.contains("open")) {
+      sidebar.classList.add("open");
+      syncUI();
+    }
+  };
+
+  const closeFloating = (withCooldown = false) => {
+    cancelHide();
+    if (withCooldown) suppressUntil = Date.now() + 360;
+    if (sidebar.classList.contains("open")) {
+      sidebar.classList.remove("open");
+      syncUI();
+    }
+  };
+
+  const scheduleHideFloating = (delay = 220) => {
+    if (getMode() !== "floating") return;
+    cancelHide();
+    hideTimer = setTimeout(() => {
+      sidebar.classList.remove("open");
+      syncUI();
+    }, delay);
+  };
+
+  const setMode = (nextMode) => {
+    const mode = nextMode === "docked" ? "docked" : "floating";
+    localStorage.setItem(SIDEBAR_MODE_KEY, mode);
+    cancelHide();
+    if (mode === "docked") {
+      localStorage.setItem(SIDEBAR_HIDDEN_KEY, "0");
+      sidebar.classList.remove("open");
+    } else {
+      sidebar.classList.add("open");
+    }
+    syncUI();
+    notifyLayoutResize();
+  };
+
+  const setDockedHidden = (hidden) => {
+    localStorage.setItem(SIDEBAR_HIDDEN_KEY, hidden ? "1" : "0");
+    syncUI();
+    notifyLayoutResize();
+  };
+
+  const hideSidebar = () => {
+    if (getMode() === "docked") {
+      setDockedHidden(true);
+    } else {
+      closeFloating(true);
+    }
+  };
+
+  const toggleSidebar = () => {
+    if (getMode() === "docked") {
+      setDockedHidden(!getDockedHidden());
+    } else if (sidebar.classList.contains("open")) {
+      closeFloating(true);
+    } else {
+      suppressUntil = 0;
+      openFloating();
+    }
+  };
+
+  // 按钮绑定
+  modeButtons.forEach((btn) => {
+    btn.addEventListener("click", () => setMode(btn.dataset.sidebarModeBtn));
+  });
+  toggleBtn?.addEventListener("click", toggleSidebar);
+  hideBtn?.addEventListener("click", hideSidebar);
+
+  // 左边缘感应热区（悬浮模式滑出；内嵌已隐藏时点击一键恢复）
+  if (edge) {
+    edge.addEventListener("mouseenter", openFloating);
+    edge.addEventListener("mouseleave", () => scheduleHideFloating(220));
+    edge.addEventListener("click", () => {
+      if (getMode() === "docked" && getDockedHidden()) {
+        setDockedHidden(false);
+      } else {
+        suppressUntil = 0;
+        openFloating();
+      }
+    });
+  }
+
+  sidebar.addEventListener("mouseenter", openFloating);
+  sidebar.addEventListener("mouseleave", () => scheduleHideFloating(220));
+  sidebar.addEventListener("focusin", openFloating);
+  sidebar.addEventListener("focusout", (event) => {
+    if (!sidebar.contains(event.relatedTarget)) scheduleHideFloating(160);
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (getMode() === "floating" && event.clientY >= 54 && event.clientX <= 14) {
+      openFloating();
+    }
+  });
+  document.addEventListener("mouseleave", () => scheduleHideFloating(160));
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (document.querySelector(".drawer-backdrop.open, .modal-backdrop.open")) return;
+    if (getMode() === "floating" && sidebar.classList.contains("open")) {
+      closeFloating(true);
+    }
+  });
+
+  syncUI();
+}
+
+let _clockTimer = null;
+function initBridgeClock() {
+  const el = $("dash-clock");
+  if (!el) return;
+  const tick = () => {
+    const now = new Date();
+    el.textContent = `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`;
+  };
+  tick();
+  if (_clockTimer) clearInterval(_clockTimer);
+  _clockTimer = setInterval(tick, 1000);
+}
+
 /* ===================== 顶栏 Web 连接巡检（对齐 SCADA workbench.js） ===================== */
 let _connOk = null;
 
@@ -425,6 +596,30 @@ async function pollConnHealth() {
     const res = await fetch("/api/health");
     const data = res.ok ? await res.json() : null;
     _connOk = Boolean(data && data.status === "ok");
+    if (data && data.status === "ok" && !document.body.classList.contains("dash-body")) {
+      const sched = data.scheduler || {};
+      const sideSched = $("side-sched");
+      if (sideSched) {
+        if (!sched.enabled) {
+          sideSched.textContent = t("state.disabled_sched");
+          sideSched.className = "warn";
+        } else if (sched.last_error) {
+          sideSched.textContent = t("state.error");
+          sideSched.className = "danger";
+        } else {
+          sideSched.textContent = t("state.running");
+          sideSched.className = "ok";
+        }
+      }
+      const sideEnabled = $("side-enabled");
+      if (sideEnabled && data.definitions !== undefined) {
+        sideEnabled.textContent = `${data.enabled ?? 0} / ${data.definitions ?? 0}`;
+      }
+      const sideDbs = $("side-dbs");
+      if (sideDbs && data.result_dbs !== undefined) {
+        sideDbs.textContent = String(data.result_dbs);
+      }
+    }
   } catch {
     _connOk = false;
   }
@@ -434,7 +629,9 @@ async function pollConnHealth() {
 function initChrome({ pollGlobalAlarms = true } = {}) {
   applyTheme(getTheme());
   initSidebar();
-  const topbar = document.querySelector(".workbench-topbar, .topbar");
+  initPortalSidebar();
+  initBridgeClock();
+  const topbar = document.querySelector(".portal-topbar, .workbench-topbar, .topbar");
   if (topbar && !$("top-progress")) {
     const bar = document.createElement("div");
     bar.id = "top-progress";

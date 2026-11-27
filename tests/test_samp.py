@@ -230,16 +230,19 @@ def test_web_pages_are_separated(tmp_path):
     with TestClient(app) as client:
         root = client.get("/", follow_redirects=False)
         assert root.status_code == 307
-        assert root.headers["location"] == "/definitions"
+        assert root.headers["location"] == "/dashboard"
         assert client.get("/storage", follow_redirects=False).headers["location"] == "/runtime#storage"
+        assert "SAMP 智能采样监控大屏" in client.get("/dashboard").text
         assert "采样定义" in client.get("/definitions").text
         assert "运行监控" in client.get("/runtime").text
         assert "采样查询" in client.get("/query").text
         for asset in (
             "/static/samp.css",
+            "/static/dashboard.css",
             "/static/i18n.js",
             "/static/common.js",
             "/static/chart.js",
+            "/static/dashboard.js",
             "/static/definitions.js",
             "/static/runtime.js",
             "/static/query.js",

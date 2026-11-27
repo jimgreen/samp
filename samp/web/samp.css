@@ -3030,3 +3030,638 @@ body.resizing-sidebar {
     width: 140px;
   }
 }
+
+
+/* ==========================================================================
+   全站统一指挥舱桥壳层（/dashboard /definitions /runtime /query 零跳变共享）
+   ========================================================================== */
+:root {
+  --dash-bg: var(--bg-canvas);
+  --dash-glass: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  --dash-glass-strong: color-mix(in srgb, var(--bg-surface) 95%, transparent);
+  --dash-border: color-mix(in srgb, var(--accent) 24%, var(--border-color));
+  --dash-border-strong: color-mix(in srgb, var(--accent) 46%, var(--border-color));
+  --dash-grid-line: color-mix(in srgb, var(--accent) 7%, transparent);
+  --dash-glow: color-mix(in srgb, var(--accent) 18%, transparent);
+  --dash-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
+  --dash-crest-bg: linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 96%, var(--accent) 4%), color-mix(in srgb, var(--bg-subtle) 92%, var(--accent) 8%));
+  --dash-hud-inner: radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--bg-surface) 96%, var(--accent) 4%), var(--bg-surface));
+  --dash-title-grad: linear-gradient(180deg, var(--text-primary) 0%, var(--accent) 100%);
+  --dash-pct-grad: linear-gradient(180deg, var(--accent) 0%, var(--ok) 100%);
+  --dash-corner: color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+[data-color-scheme="dark"] {
+  --dash-bg: var(--bg-canvas);
+  --dash-glass: color-mix(in srgb, var(--bg-surface) 76%, transparent);
+  --dash-glass-strong: color-mix(in srgb, var(--bg-surface) 90%, transparent);
+  --dash-border: color-mix(in srgb, var(--accent) 32%, transparent);
+  --dash-border-strong: color-mix(in srgb, var(--accent) 56%, transparent);
+  --dash-grid-line: color-mix(in srgb, var(--accent) 8%, transparent);
+  --dash-glow: color-mix(in srgb, var(--accent) 26%, transparent);
+  --dash-shadow: 0 8px 24px rgba(0, 6, 18, 0.48), inset 0 0 14px color-mix(in srgb, var(--accent) 8%, transparent);
+  --dash-crest-bg: linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 92%, var(--accent) 14%), color-mix(in srgb, var(--bg-canvas) 94%, var(--accent) 8%));
+  --dash-hud-inner: radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--bg-surface) 94%, var(--accent) 16%), color-mix(in srgb, var(--bg-canvas) 95%, transparent));
+  --dash-title-grad: linear-gradient(180deg, #f0f9ff 0%, var(--accent) 100%);
+  --dash-pct-grad: linear-gradient(180deg, var(--accent) 0%, var(--ok) 100%);
+  --dash-corner: color-mix(in srgb, var(--accent) 62%, transparent);
+}
+
+body.bridge-page {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--dash-bg);
+  color: var(--text-primary);
+}
+
+.cockpit-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 68% 48% at 50% 42%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 72%),
+    radial-gradient(ellipse 46% 36% at 14% 88%, color-mix(in srgb, var(--ok) 9%, transparent), transparent 70%),
+    radial-gradient(ellipse 42% 32% at 88% 18%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 68%),
+    var(--dash-bg);
+}
+
+.cockpit-grid-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--dash-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--dash-grid-line) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.cockpit-corner {
+  position: fixed;
+  width: 24px;
+  height: 24px;
+  z-index: 25;
+  pointer-events: none;
+  border-color: var(--dash-corner);
+  border-style: solid;
+  border-width: 0;
+}
+.cockpit-corner.tl { top: 6px; left: 6px; border-top-width: 2px; border-left-width: 2px; }
+.cockpit-corner.tr { top: 6px; right: 6px; border-top-width: 2px; border-right-width: 2px; }
+.cockpit-corner.bl { bottom: 6px; left: 6px; border-bottom-width: 2px; border-left-width: 2px; }
+.cockpit-corner.br { bottom: 6px; right: 6px; border-bottom-width: 2px; border-right-width: 2px; }
+
+/* 54px 三栏悬浮指挥舱桥顶栏 */
+.portal-topbar {
+  position: relative;
+  z-index: 30;
+  height: 54px;
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  background: var(--dash-glass-strong);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--dash-border);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+[data-color-scheme="dark"] .portal-topbar {
+  box-shadow: 0 6px 24px rgba(0, 6, 18, 0.45);
+}
+
+.portal-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.portal-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  text-decoration: none;
+  color: var(--text-primary);
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.portal-logo-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--accent), var(--ok));
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 13px;
+  box-shadow: 0 0 12px var(--dash-glow);
+}
+
+.portal-rate-ctrl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dash-select {
+  height: 26px;
+  padding: 0 7px;
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--dash-border);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dash-icon-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--dash-border);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.dash-icon-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dash-icon-btn.spinning svg {
+  animation: dash-spin 0.8s linear infinite;
+}
+
+@keyframes dash-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.health-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: var(--ok-soft);
+  border: 1px solid color-mix(in srgb, var(--ok) 38%, transparent);
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.health-chip.warn {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 42%, transparent);
+  color: var(--warn);
+}
+
+.health-chip.danger {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 42%, transparent);
+  color: var(--danger);
+}
+
+/* 中央斜角梯形全息指挥冠 */
+.bridge-crest {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 14px;
+}
+
+.crest-wing {
+  width: 30px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent));
+  box-shadow: 0 0 8px var(--dash-glow);
+}
+
+.crest-wing.right {
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+
+.crest-plate {
+  position: relative;
+  padding: 6px 24px 7px;
+  background: var(--dash-crest-bg);
+  border: 1px solid var(--dash-border-strong);
+  clip-path: polygon(12px 0, calc(100% - 12px) 0, 100% 100%, 0 100%);
+  box-shadow: 0 4px 16px var(--dash-glow);
+}
+
+.crest-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+  background: var(--dash-title-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.portal-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  min-width: 0;
+}
+
+.dash-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--dash-border-strong);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 140ms ease;
+}
+
+.dash-btn:hover {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  box-shadow: 0 0 12px var(--dash-glow);
+}
+
+.dash-btn.subtle {
+  background: var(--bg-subtle);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+.dash-btn.subtle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+
+.dash-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.portal-clock {
+  padding: 3px 9px;
+  border-radius: 5px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--dash-border);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.portal-topbar .ui-global-controls {
+  gap: 5px;
+}
+.portal-topbar .theme-swatch-btn,
+.portal-topbar .select-ctrl.ctrl-sm {
+  height: 28px;
+  font-size: 11px;
+}
+.portal-topbar .conn-status {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+/* 左边缘感应热区与悬浮抽屉左栏（四页共用） */
+.sidebar-edge-zone {
+  position: fixed;
+  left: 0;
+  top: 54px;
+  bottom: 0;
+  width: 14px;
+  z-index: 38;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+}
+
+.edge-handle {
+  width: 3px;
+  height: 52px;
+  margin-left: 2px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--accent) 42%, transparent);
+  box-shadow: 0 0 8px var(--dash-glow);
+  opacity: 0.55;
+  transition: opacity 160ms ease, height 160ms ease, background 160ms ease;
+}
+
+.sidebar-edge-zone:hover .edge-handle {
+  opacity: 1;
+  height: 76px;
+  background: var(--accent);
+}
+
+.portal-body {
+  position: relative;
+  z-index: 10;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 10px 14px 12px;
+}
+
+.portal-sidebar {
+  position: fixed;
+  top: 64px;
+  bottom: 12px;
+  left: 12px;
+  width: 196px;
+  z-index: 42;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 8px;
+  border-radius: var(--radius-card);
+  background: var(--dash-glass-strong);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--dash-border-strong);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.24), var(--dash-shadow);
+  transform: translateX(calc(-100% - 20px));
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease;
+}
+
+[data-color-scheme="dark"] .portal-sidebar {
+  box-shadow: 0 16px 42px rgba(0, 6, 18, 0.72), 0 0 22px var(--dash-glow);
+}
+
+.portal-sidebar.open {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 左栏顶部双模式分段开关（悬浮 / 内嵌）+ 一键隐藏 */
+.sidebar-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 2px 8px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 2px;
+}
+
+.sidebar-mode-seg {
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 1;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--dash-border);
+}
+
+.sidebar-mode-btn {
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 130ms ease;
+  white-space: nowrap;
+}
+
+.sidebar-mode-btn:hover {
+  color: var(--text-primary);
+}
+
+.sidebar-mode-btn.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  box-shadow: 0 1px 4px var(--dash-glow);
+}
+
+.sidebar-hide-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 130ms ease;
+}
+
+.sidebar-hide-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 内嵌模式（docked）：嵌入文档流并排展示，支持隐藏后恢复 100% 满屏 */
+[data-sidebar-mode="docked"][data-sidebar-hidden="0"] .portal-body {
+  gap: 10px;
+}
+
+[data-sidebar-mode="docked"][data-sidebar-hidden="0"] .portal-sidebar {
+  position: relative;
+  top: auto;
+  bottom: auto;
+  left: auto;
+  width: 192px;
+  flex-shrink: 0;
+  z-index: 15;
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  background: var(--dash-glass);
+  box-shadow: var(--dash-shadow);
+}
+
+[data-sidebar-mode="docked"][data-sidebar-hidden="0"] .sidebar-edge-zone {
+  display: none;
+}
+
+[data-sidebar-mode="docked"][data-sidebar-hidden="1"] .portal-sidebar {
+  display: none;
+}
+
+/* 悬浮模式手动主动隐藏态：确保平滑退出 */
+[data-sidebar-mode="floating"] .portal-sidebar:not(.open) {
+  transform: translateX(calc(-100% - 20px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dash-icon-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.portal-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.portal-nav-title {
+  padding: 6px 10px 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.portal-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 140ms ease;
+}
+
+.portal-nav-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--dash-border);
+}
+
+.portal-nav-item.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--dash-border-strong);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.portal-nav-item .nav-arrow {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.portal-nav-item .ico {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.sidebar-health {
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--dash-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.health-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  gap: 6px;
+}
+
+.health-row span {
+  color: var(--text-secondary);
+}
+
+.health-row strong {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.health-row strong.ok { color: var(--ok); }
+.health-row strong.warn { color: var(--warn); }
+.health-row strong.danger { color: var(--danger); }
+
+/* 工作台页面挂载在指挥舱桥壳层下的玻璃通透融合与 100% 满屏布局 */
+body.bridge-page .portal-body > .main-column {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  gap: 10px;
+  background: transparent;
+}
+
+body.bridge-page .metric-strip {
+  background: var(--dash-glass);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--dash-border);
+  box-shadow: var(--dash-shadow);
+}
+
+body.bridge-page .panel {
+  background: var(--dash-glass);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--dash-border);
+  box-shadow: var(--dash-shadow);
+}
+
+body.bridge-page .drawer,
+body.bridge-page .modal {
+  border-color: var(--dash-border-strong);
+}
+
+@media (max-width: 1180px) {
+  .crest-wing {
+    display: none;
+  }
+}
