@@ -594,6 +594,57 @@ function initBridgeClock() {
   _clockTimer = setInterval(tick, 1000);
 }
 
+/* ===================== 全站顶栏全屏切换控制 ===================== */
+const FULLSCREEN_ENTER_SVG =
+  '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+const FULLSCREEN_EXIT_SVG =
+  '<svg class="ico ico-xs" viewBox="0 0 24 24"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>';
+
+function initFullscreenToggle() {
+  const btn = $("btn-fullscreen");
+  if (!btn || btn.dataset.fsBound) return;
+  btn.dataset.fsBound = "1";
+
+  const isFullscreen = () => Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+
+  const syncFullscreenUI = () => {
+    const active = isFullscreen();
+    const label = t(active ? "action.fullscreen_exit" : "action.fullscreen_enter");
+    btn.classList.toggle("active", active);
+    btn.innerHTML = active ? FULLSCREEN_EXIT_SVG : FULLSCREEN_ENTER_SVG;
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  };
+
+  btn.addEventListener("click", async () => {
+    try {
+      if (isFullscreen()) {
+        const exitFn = document.exitFullscreen || document.webkitExitFullscreen;
+        if (exitFn) await exitFn.call(document);
+      } else {
+        const el = document.documentElement;
+        const reqFn = el.requestFullscreen || el.webkitRequestFullscreen;
+        if (reqFn) await reqFn.call(el);
+      }
+    } catch (err) {
+      toast(err?.message || String(err), "error");
+    } finally {
+      syncFullscreenUI();
+    }
+  });
+
+  const onFsChange = () => {
+    syncFullscreenUI();
+    requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    setTimeout(() => window.dispatchEvent(new Event("resize")), 180);
+  };
+  document.addEventListener("fullscreenchange", onFsChange);
+  document.addEventListener("webkitfullscreenchange", onFsChange);
+  onLangChange(syncFullscreenUI);
+  syncFullscreenUI();
+}
+
 /* ===================== 顶栏 Web 连接巡检（对齐 SCADA workbench.js） ===================== */
 let _connOk = null;
 
@@ -655,6 +706,7 @@ function initChrome({ pollGlobalAlarms = true } = {}) {
   initSidebar();
   initPortalSidebar();
   initBridgeClock();
+  initFullscreenToggle();
   const topbar = document.querySelector(".portal-topbar, .workbench-topbar, .topbar");
   if (topbar && !$("top-progress")) {
     const bar = document.createElement("div");
