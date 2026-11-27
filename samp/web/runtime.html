@@ -89,7 +89,9 @@
           <select id="status-filter" class="select-ctrl">
             <option value="all" data-i18n="rt.filter_all">全部</option>
             <option value="error" data-i18n="rt.filter_error">仅异常</option>
-            <option value="auto" data-i18n="rt.filter_auto">自动调度</option>
+            <option value="periodic" data-i18n="rt.filter_periodic">周期</option>
+            <option value="fixed" data-i18n="rt.filter_fixed">定点</option>
+            <option value="trigger" data-i18n="rt.filter_trigger">触发</option>
             <option value="manual" data-i18n="rt.filter_manual">手动</option>
           </select>
           <select id="log-filter" class="select-ctrl hidden">
@@ -124,7 +126,7 @@
             <tr>
               <th data-i18n="col.name">采样点</th>
               <th data-i18n="col.status">状态</th>
-              <th class="num" data-i18n="col.interval">周期</th>
+              <th data-i18n="col.start_mode">启动方式</th>
               <th data-i18n="col.source_table">源表</th>
               <th data-i18n="col.years">年份</th>
               <th class="num" data-i18n="col.rows">行数</th>

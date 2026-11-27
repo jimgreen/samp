@@ -11,6 +11,7 @@
     confirmModal,
     formatTime,
     formatBytes,
+    formatStartModeSummary,
     syncAlarmsFromStatus,
     initChrome,
     onLangChange,
@@ -43,20 +44,33 @@
     if (tab === "storage") loadStorage();
   }
 
-  function formatCountdown(nextTs) {
-    if (!nextTs) return t("empty.dash");
+  function formatCountdown(nextTs, item = null) {
+    if (item && item.enabled && item.start_mode === "trigger") {
+      return `<span class="badge ok">${esc(t("trig.waiting"))}</span>`;
+    }
+    if (!nextTs) return esc(t("empty.dash"));
     const diff = Math.max(0, Math.round(nextTs - Date.now() / 1000));
-    if (diff < 60) return `${diff}${t("unit.sec")}`;
-    const m = Math.floor(diff / 60);
-    const s = diff % 60;
-    return `${m}m${s}s`;
+    if (diff < 60) return esc(`${diff}${t("unit.sec")}`);
+    if (diff < 3600) {
+      const m = Math.floor(diff / 60);
+      const s = diff % 60;
+      return esc(`${m}m${s}s`);
+    }
+    if (diff < 86400) {
+      const h = Math.floor(diff / 3600);
+      const m = Math.floor((diff % 3600) / 60);
+      return esc(`${h}h${m}m`);
+    }
+    return esc(formatTime(nextTs, true));
   }
 
   function renderMetrics() {
     const data = state.statusData || {};
     const sched = data.scheduler || {};
     const items = data.items || [];
-    const autoCount = items.filter((i) => i.enabled && i.interval_seconds > 0).length;
+    const autoCount = items.filter(
+      (i) => i.enabled && (i.start_mode === "fixed" || i.start_mode === "trigger" || i.interval_seconds > 0)
+    ).length;
     const totalSize = items.reduce((acc, i) => acc + (i.result_size_bytes || 0), 0);
 
     const dot = $("rt-dot");
@@ -148,9 +162,12 @@
     const tbody = $("status-tbody");
     const rawItems = state.statusData?.items || [];
     const filtered = rawItems.filter((item) => {
+      const mode = item.start_mode || "periodic";
       if (state.statusFilter === "error") return item.last_status === "error";
-      if (state.statusFilter === "auto") return item.enabled && item.interval_seconds > 0;
-      if (state.statusFilter === "manual") return item.interval_seconds === 0;
+      if (state.statusFilter === "periodic") return mode === "periodic" && item.interval_seconds > 0;
+      if (state.statusFilter === "fixed") return mode === "fixed";
+      if (state.statusFilter === "trigger") return mode === "trigger";
+      if (state.statusFilter === "manual") return mode === "periodic" && item.interval_seconds === 0;
       return true;
     });
     // 异常项自动置顶，同级保持原有顺序
@@ -174,7 +191,12 @@
         const enabledBadge = item.enabled
           ? `<span class="badge ok">${esc(t("state.enabled"))}</span>`
           : `<span class="badge muted">${esc(t("state.disabled"))}</span>`;
-        const period = item.interval_seconds > 0 ? `${item.interval_seconds}${t("unit.sec")}` : t("state.manual");
+        const modeInfo = formatStartModeSummary(item);
+        const modeBadgeCls = modeInfo.mode === "fixed" ? "ok" : modeInfo.mode === "trigger" ? "warn" : "muted";
+        const modeCell =
+          modeInfo.mode === "periodic"
+            ? `<span class="mono">${esc(modeInfo.shortText)}</span>`
+            : `<span class="badge ${modeBadgeCls}" title="${esc(modeInfo.title)}">${esc(modeInfo.shortText)}</span>`;
         const years = item.result_years?.length ? item.result_years.join(", ") : t("empty.dash");
         const itemBadge =
           item.item_count > 1 ? ` <span class="badge ok">${esc(t("def.item_count", { n: item.item_count }))}</span>` : "";
@@ -195,13 +217,13 @@
           <tr>
             <td><strong>${esc(item.name)}</strong>${itemBadge}</td>
             <td>${enabledBadge}</td>
-            <td class="num">${esc(period)}</td>
+            <td class="cell-ellipsis-sm" title="${esc(modeInfo.title)}">${modeCell}</td>
             <td class="mono">${esc(item.source_table)}</td>
             <td class="mono" title="${esc(item.target_preview || "")}">${esc(years)}</td>
             ${dataBarTd(item.total_rows, maxRows, String(item.total_rows ?? 0))}
             ${dataBarTd(item.result_size_bytes, maxSize, formatBytes(item.result_size_bytes))}
             <td class="num">${esc(formatTime(item.last_result_at, true))}</td>
-            <td class="num">${esc(formatCountdown(item.next_run_at))}</td>
+            <td class="num">${formatCountdown(item.next_run_at, item)}</td>
             ${dataBarTd(item.last_duration_ms, maxMs, durText, Number(item.last_duration_ms || 0) >= 500)}
             <td class="cell-ellipsis" title="${esc(item.last_error || "")}">${msgHtml}</td>
             <td class="sticky-actions">
@@ -226,8 +248,15 @@
     }
     tbody.innerHTML = logs
       .map((row) => {
-        const triggerKey =
-          row.trigger === "auto" ? "rt.trigger_auto" : row.trigger === "batch" ? "rt.trigger_batch" : "rt.trigger_manual";
+        const triggerMap = {
+          auto: "rt.trigger_auto",
+          fixed: "rt.trigger_fixed",
+          flag: "rt.trigger_flag",
+          api: "rt.trigger_api",
+          batch: "rt.trigger_batch",
+          manual: "rt.trigger_manual"
+        };
+        const triggerKey = triggerMap[row.trigger] || "rt.trigger_manual";
         const badge =
           row.status === "error"
             ? `<span class="badge danger">${esc(t("state.error"))}</span>`

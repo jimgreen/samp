@@ -11,6 +11,8 @@
     toast,
     confirmModal,
     formatTime,
+    formatFixedPoint,
+    formatStartModeSummary,
     checkedFields,
     setAllFields,
     renderFieldChecks,
@@ -35,6 +37,9 @@
     sourceData: null,
     draftItems: [],
     activeItemIdx: 0,
+    startMode: "periodic",
+    fixedUnit: "day",
+    fixedPoints: [],
     keyword: "",
     statusFilter: "all",
     // 整表采样双栏工作台状态
@@ -230,6 +235,11 @@
           : esc(fieldsStr);
         const targetStr = d.target_preview || `samp/samp_${d.samp_name}_{year}.db`;
         const toggleTitle = d.enabled ? t("action.disable") : t("action.enable");
+        const modeInfo = formatStartModeSummary(d);
+        const startCell =
+          modeInfo.mode === "periodic"
+            ? `<td class="cell-input"><input type="number" min="0" step="1" class="num-in inline-period" data-id="${d.id}" value="${esc(d.interval_seconds)}" title="${esc(t("def.label_interval"))}"></td>`
+            : `<td class="cell-ellipsis-sm" title="${esc(modeInfo.title)}"><span class="badge ${modeInfo.mode === "fixed" ? "ok" : "warn"}">${esc(modeInfo.shortText)}</span></td>`;
         return `
           <tr class="${checked ? "selected" : ""}" data-row-id="${d.id}">
             <td><input type="checkbox" class="row-check" data-id="${d.id}" ${checked ? "checked" : ""}></td>
@@ -238,9 +248,7 @@
             <td class="mono cell-ellipsis" title="${esc(d.source_database)}">${esc(d.source_database)}</td>
             <td class="mono cell-ellipsis" title="${esc(targetStr)}">${esc(targetStr)}</td>
             <td class="mono cell-ellipsis-sm" title="${esc(fieldsStr)}">${fieldsCell}</td>
-            <td class="cell-input">
-              <input type="number" min="0" step="1" class="num-in inline-period" data-id="${d.id}" value="${esc(d.interval_seconds)}" title="${esc(t("def.label_interval"))}">
-            </td>
+            ${startCell}
             <td class="cell-input">
               <input type="text" class="filter-in inline-filter" data-id="${d.id}" value="${esc(d.filter || "")}" placeholder="${esc(t("empty.dash"))}" title="${esc(d.filter || t("def.label_filter"))}">
             </td>
@@ -297,6 +305,8 @@
           target_name: def.target_name || "",
           fields: def.fields,
           items: nextItems.length ? nextItems : undefined,
+          start_mode: def.start_mode || "periodic",
+          schedule_config: def.schedule_config || {},
           interval_seconds: nextInterval,
           filter: nextFilter,
           enabled: Boolean(def.enabled)
@@ -857,6 +867,252 @@
     });
   }
 
+  /* ===================== 3 种启动方式编辑器（周期 / 定点 / 触发） ===================== */
+  function initFixedDayOptions() {
+    const sel = $("fx-day");
+    if (!sel) return;
+    const prev = sel.value || "1";
+    sel.innerHTML = Array.from({ length: 31 }, (_, i) => {
+      const d = i + 1;
+      return `<option value="${d}">${esc(`${d}${t("fixed.day_suffix")}`)}</option>`;
+    }).join("");
+    sel.value = prev;
+  }
+
+  function setStartMode(mode) {
+    state.startMode = ["periodic", "fixed", "trigger"].includes(mode) ? mode : "periodic";
+    $("start-mode-tabs").querySelectorAll("[data-start-mode]").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.startMode === state.startMode);
+    });
+    $("sched-periodic").classList.toggle("hidden", state.startMode !== "periodic");
+    $("sched-fixed").classList.toggle("hidden", state.startMode !== "fixed");
+    $("sched-trigger").classList.toggle("hidden", state.startMode !== "trigger");
+    if (state.startMode === "fixed") {
+      syncFixedUnitUI();
+      if (!state.fixedPoints.length) {
+        addDefaultFixedPoint();
+      }
+      renderFixedPoints();
+    } else if (state.startMode === "trigger") {
+      updateTriggerHint();
+      syncTriggerSourceUI();
+    }
+  }
+
+  function syncFixedUnitUI() {
+    const unit = $("fx-unit").value || "day";
+    state.fixedUnit = unit;
+    $("fx-weekday").classList.toggle("hidden", unit !== "week");
+    $("fx-day").classList.toggle("hidden", unit !== "month");
+    const hideHour = unit === "hour";
+    $("fx-hour").classList.toggle("hidden", hideHour);
+    $("fx-hour-sep").classList.toggle("hidden", hideHour);
+  }
+
+  function addDefaultFixedPoint() {
+    const u = state.fixedUnit || "day";
+    if (u === "hour") state.fixedPoints = [{ minute: 0, second: 0 }];
+    else if (u === "day") state.fixedPoints = [{ hour: 0, minute: 0, second: 0 }];
+    else if (u === "week") state.fixedPoints = [{ weekday: 1, hour: 0, minute: 0, second: 0 }];
+    else state.fixedPoints = [{ day: 1, hour: 0, minute: 0, second: 0 }];
+  }
+
+  function fixedPointKey(unit, pt) {
+    if (unit === "hour") return `${pt.minute}:${pt.second}`;
+    if (unit === "day") return `${pt.hour}:${pt.minute}:${pt.second}`;
+    if (unit === "week") return `${pt.weekday}:${pt.hour}:${pt.minute}:${pt.second}`;
+    return `${pt.day}:${pt.hour}:${pt.minute}:${pt.second}`;
+  }
+
+  function sortFixedPoints() {
+    state.fixedPoints.sort((a, b) => {
+      return (
+        (a.day || 0) - (b.day || 0) ||
+        (a.weekday || 0) - (b.weekday || 0) ||
+        (a.hour || 0) - (b.hour || 0) ||
+        (a.minute || 0) - (b.minute || 0) ||
+        (a.second || 0) - (b.second || 0)
+      );
+    });
+  }
+
+  function renderFixedPoints() {
+    const box = $("fx-points-list");
+    if (!box) return;
+    if (!state.fixedPoints.length) {
+      box.innerHTML = `<span class="text-muted" style="font-size:11px">${esc(t("empty.dash"))}</span>`;
+      return;
+    }
+    sortFixedPoints();
+    const u = state.fixedUnit;
+    box.innerHTML = state.fixedPoints
+      .map(
+        (pt, idx) =>
+          `<span class="point-chip">${esc(formatFixedPoint(u, pt))}<button type="button" class="point-chip-del" data-fx-del="${idx}">&times;</button></span>`
+      )
+      .join("");
+  }
+
+  function addFixedPointFromInputs() {
+    const u = state.fixedUnit;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(Number(v) || 0)));
+    const h = clamp($("fx-hour").value, 0, 23);
+    const m = clamp($("fx-minute").value, 0, 59);
+    const s = clamp($("fx-second").value, 0, 59);
+    let pt;
+    if (u === "hour") pt = { minute: m, second: s };
+    else if (u === "day") pt = { hour: h, minute: m, second: s };
+    else if (u === "week") pt = { weekday: clamp($("fx-weekday").value, 1, 7), hour: h, minute: m, second: s };
+    else pt = { day: clamp($("fx-day").value, 1, 31), hour: h, minute: m, second: s };
+
+    const k = fixedPointKey(u, pt);
+    if (!state.fixedPoints.some((x) => fixedPointKey(u, x) === k)) {
+      state.fixedPoints.push(pt);
+    }
+    renderFixedPoints();
+  }
+
+  function updateTriggerHint() {
+    const hint = $("tg-builtin-hint");
+    if (!hint) return;
+    const nm = $("f-name").value.trim() || "{name}";
+    hint.textContent = t("trig.api_hint", { name: nm });
+  }
+
+  async function loadTriggerExtColumns(db, table, targetCol = "") {
+    const colSel = $("tg-col");
+    if (!db || !table) {
+      colSel.innerHTML = `<option value="">${esc(t("empty.dash"))}</option>`;
+      return;
+    }
+    try {
+      const data = await api(`/api/source/${encodeURIComponent(table)}/fields?source_database=${encodeURIComponent(db)}`);
+      const fields = data.fields || [];
+      colSel.innerHTML = fields.map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
+      if (targetCol && fields.includes(targetCol)) colSel.value = targetCol;
+    } catch {
+      colSel.innerHTML = `<option value="">${esc(t("empty.dash"))}</option>`;
+    }
+  }
+
+  async function loadTriggerExtTables(db, targetTable = "", targetCol = "") {
+    const tblSel = $("tg-table");
+    if (!db) {
+      tblSel.innerHTML = `<option value="">${esc(t("empty.dash"))}</option>`;
+      $("tg-col").innerHTML = `<option value="">${esc(t("empty.dash"))}</option>`;
+      return;
+    }
+    try {
+      const data = await api(`/api/source/tables?source_database=${encodeURIComponent(db)}`);
+      const tables = data.tables || [];
+      tblSel.innerHTML = tables.map((tb) => `<option value="${esc(tb)}">${esc(tb)}</option>`).join("");
+      const chosen = targetTable && tables.includes(targetTable) ? targetTable : tables[0] || "";
+      if (chosen) {
+        tblSel.value = chosen;
+        await loadTriggerExtColumns(db, chosen, targetCol);
+      } else {
+        $("tg-col").innerHTML = `<option value="">${esc(t("empty.dash"))}</option>`;
+      }
+    } catch {
+      tblSel.innerHTML = `<option value="">${esc(t("empty.dash"))}</option>`;
+      $("tg-col").innerHTML = `<option value="">${esc(t("empty.dash"))}</option>`;
+    }
+  }
+
+  async function syncTriggerSourceUI(presetCfg = null) {
+    const src = $("tg-source").value || "builtin";
+    const isExt = src === "external";
+    $("tg-builtin-hint").classList.toggle("hidden", isExt);
+    $("tg-ext-row").classList.toggle("hidden", !isExt);
+    if (!isExt) {
+      updateTriggerHint();
+      return;
+    }
+    const dbSel = $("tg-db");
+    const dbs = state.config.source_databases || [];
+    const targetDb = presetCfg?.database || dbSel.value || dbs[0] || "";
+    const allOpts = dbs.includes(targetDb) || !targetDb ? dbs : [targetDb, ...dbs];
+    dbSel.innerHTML = allOpts.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+    if (targetDb) dbSel.value = targetDb;
+    await loadTriggerExtTables(dbSel.value, presetCfg?.table || "", presetCfg?.column || "");
+  }
+
+  function applyScheduleToForm(def = null) {
+    const mode = def?.start_mode || "periodic";
+    const cfg = def?.schedule_config || {};
+    initFixedDayOptions();
+    if (mode === "fixed") {
+      state.fixedUnit = cfg.unit || "day";
+      $("fx-unit").value = state.fixedUnit;
+      state.fixedPoints = Array.isArray(cfg.points) ? cfg.points.map((p) => ({ ...p })) : [];
+      syncFixedUnitUI();
+      renderFixedPoints();
+    } else {
+      state.fixedUnit = "day";
+      $("fx-unit").value = "day";
+      state.fixedPoints = [];
+    }
+    if (mode === "trigger") {
+      $("tg-source").value = cfg.source || "builtin";
+      $("tg-val").value = cfg.trigger_value ?? "1";
+      $("tg-reset").value = cfg.reset_value ?? "0";
+      $("tg-auto-reset").checked = cfg.auto_reset !== false;
+      $("tg-filter").value = cfg.filter || "";
+    } else {
+      $("tg-source").value = "builtin";
+      $("tg-val").value = "1";
+      $("tg-reset").value = "0";
+      $("tg-auto-reset").checked = true;
+      $("tg-filter").value = "";
+    }
+    setStartMode(mode);
+    if (mode === "trigger" && cfg.source === "external") {
+      syncTriggerSourceUI(cfg);
+    }
+  }
+
+  function collectSchedulePayload() {
+    const mode = state.startMode || "periodic";
+    if (mode === "periodic") {
+      return { start_mode: "periodic", schedule_config: {} };
+    }
+    if (mode === "fixed") {
+      if (!state.fixedPoints.length) {
+        toast(t("fixed.need_point"), "error");
+        return null;
+      }
+      return {
+        start_mode: "fixed",
+        schedule_config: {
+          unit: state.fixedUnit,
+          points: state.fixedPoints.map((p) => ({ ...p }))
+        }
+      };
+    }
+    // trigger
+    const src = $("tg-source").value || "builtin";
+    const base = {
+      source: src,
+      trigger_value: ($("tg-val").value || "1").trim() || "1",
+      reset_value: ($("tg-reset").value ?? "0").trim(),
+      auto_reset: $("tg-auto-reset").checked
+    };
+    if (src === "external") {
+      const db = $("tg-db").value;
+      const tb = $("tg-table").value;
+      const col = $("tg-col").value;
+      if (!db || !tb || !col) {
+        toast(t("trig.need_ext"), "error");
+        return null;
+      }
+      base.database = db;
+      base.table = tb;
+      base.column = col;
+      base.filter = $("tg-filter").value.trim();
+    }
+    return { start_mode: "trigger", schedule_config: base };
+  }
+
   function previewTargetPath(name, targetDir, targetName) {
     const dirRaw = String(targetDir || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
     const dir = dirRaw || state.config.sqlite_dir || "samp";
@@ -1238,6 +1494,7 @@
     $("preview-meta").textContent = t("empty.dash");
     $("preview-wrap").innerHTML = "";
     $("f-rename-migrate").checked = true;
+    applyScheduleToForm(mode === "new" ? null : def);
     highlightPeriodChip();
     updateTargetPreview();
     updateRenameWarning();
@@ -1289,6 +1546,8 @@
           curTargetDir !== origDir ||
           $("f-target-name").value.trim() !== orig.target_name)
     );
+    const schedPayload = collectSchedulePayload();
+    if (!schedPayload) return;
     const primary = state.draftItems[0];
     const payload = {
       name: $("f-name").value.trim(),
@@ -1298,7 +1557,9 @@
       target_name: $("f-target-name").value.trim(),
       fields: primary.fields,
       items: state.draftItems,
-      interval_seconds: Number($("f-interval").value),
+      start_mode: schedPayload.start_mode,
+      schedule_config: schedPayload.schedule_config,
+      interval_seconds: Number($("f-interval").value || 0),
       filter: primary.filter || "",
       enabled: $("f-enabled").checked,
       rename_results: targetChanged ? $("f-rename-migrate").checked : false
@@ -2194,7 +2455,31 @@
       updateTargetPreview();
       updateRenameWarning();
       validateNameInput();
+      updateTriggerHint();
     });
+    $("start-mode-tabs").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-start-mode]");
+      if (!btn) return;
+      setStartMode(btn.dataset.startMode);
+    });
+    $("fx-unit").addEventListener("change", () => {
+      const prev = state.fixedUnit;
+      syncFixedUnitUI();
+      if (prev !== state.fixedUnit) {
+        addDefaultFixedPoint();
+      }
+      renderFixedPoints();
+    });
+    $("btn-add-fixed-pt").addEventListener("click", addFixedPointFromInputs);
+    $("fx-points-list").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-fx-del]");
+      if (!btn) return;
+      state.fixedPoints.splice(Number(btn.dataset.fxDel), 1);
+      renderFixedPoints();
+    });
+    $("tg-source").addEventListener("change", () => syncTriggerSourceUI());
+    $("tg-db").addEventListener("change", (e) => loadTriggerExtTables(e.target.value));
+    $("tg-table").addEventListener("change", (e) => loadTriggerExtColumns($("tg-db").value, e.target.value));
     $("f-target-dir-custom").addEventListener("input", () => {
       updateTargetPreview();
       updateRenameWarning();
@@ -2266,6 +2551,9 @@
       tsTargetDirTree?.refreshLabels();
       if ($("drawer-backdrop").classList.contains("open")) {
         renderItemsStrip();
+        initFixedDayOptions();
+        renderFixedPoints();
+        updateTriggerHint();
       }
       if ($("ts-backdrop").classList.contains("open")) {
         tsRenderTableList();

@@ -2411,6 +2411,75 @@ body.resizing-sidebar {
   cursor: not-allowed;
 }
 
+/* 启动方式紧凑面板（周期 / 定点多时间点 / 触发标志位） */
+.schedule-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: var(--border);
+  border-radius: var(--radius-btn);
+  background: var(--bg-subtle);
+}
+
+.schedule-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.point-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 24px;
+  align-items: center;
+}
+
+.point-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 9999px;
+  border: var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.point-chip-del {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.point-chip-del:hover {
+  color: var(--danger);
+}
+
+.hms-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.hms-num {
+  width: 48px !important;
+  text-align: center;
+  font-family: var(--font-mono);
+  padding: 0 4px !important;
+}
+
 /* 非阻塞一级预警 Toast */
 .toast {
   position: fixed;

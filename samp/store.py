@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from .rtdb_schema import REGISTRY_TABLES, sync_table
+from .schedule import TYPE_TO_MODE, normalize_schedule
 
 _IDENT = re.compile(r"^[A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*$")
 _RESULT_FILE = re.compile(r"^samp_([A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*)_(\d{4})\.db$")
@@ -299,7 +300,7 @@ class Store:
             if "source_database" not in col_names:
                 conn.execute("ALTER TABLE samp_define ADD COLUMN source_database TEXT NOT NULL DEFAULT ''")
                 col_names.add("source_database")
-            # 仅对标准定义库自动补齐 target_dir/target_name/items_json，兼容旧版极简测试库
+            # 仅对标准定义库自动补齐 target_dir/target_name/items_json/schedule_json/trigger_flag，兼容旧版极简测试库
             if "source_table" in col_names:
                 if "target_dir" not in col_names:
                     conn.execute("ALTER TABLE samp_define ADD COLUMN target_dir TEXT NOT NULL DEFAULT ''")
@@ -307,6 +308,10 @@ class Store:
                     conn.execute("ALTER TABLE samp_define ADD COLUMN target_name TEXT NOT NULL DEFAULT ''")
                 if "items_json" not in col_names:
                     conn.execute("ALTER TABLE samp_define ADD COLUMN items_json TEXT NOT NULL DEFAULT ''")
+                if "schedule_json" not in col_names:
+                    conn.execute("ALTER TABLE samp_define ADD COLUMN schedule_json TEXT NOT NULL DEFAULT ''")
+                if "trigger_flag" not in col_names:
+                    conn.execute("ALTER TABLE samp_define ADD COLUMN trigger_flag INTEGER NOT NULL DEFAULT 0")
             columns = conn.execute("PRAGMA table_info(samp_define)").fetchall()
             sync_table(conn, self.definition_db, "samp_define", columns)
         self._invalidate_definition_cache()
@@ -646,14 +651,42 @@ class Store:
                 found.append((int(match.group(1)), path))
         return found
 
+    def _parse_schedule_from_row(self, row: sqlite3.Row) -> tuple[str, int, dict[str, Any]]:
+        keys = set(row.keys())
+        raw_type = int(row["samp_type"]) if "samp_type" in keys and row["samp_type"] is not None else 1
+        raw_json = str(row["schedule_json"] or "").strip() if "schedule_json" in keys else ""
+        cfg: dict[str, Any] = {}
+        if raw_json:
+            try:
+                parsed = json.loads(raw_json)
+                if isinstance(parsed, dict):
+                    cfg = parsed
+            except (ValueError, TypeError):
+                cfg = {}
+        mode = TYPE_TO_MODE.get(raw_type, "periodic")
+        try:
+            mode, stype, norm_cfg = normalize_schedule(mode, cfg, samp_type=raw_type)
+        except ValueError:
+            return "periodic", 1, {}
+        if mode == "trigger" and norm_cfg.get("source") == "external" and norm_cfg.get("database"):
+            norm_cfg["database"] = self.to_relative_path(norm_cfg["database"])
+        return mode, stype, norm_cfg
+
     def _public(self, row: sqlite3.Row, default_source_db: str | None = None) -> dict[str, Any]:
         data = dict(row)
         items = self._items_from_row(row, default_source_db)
         primary = items[0]
+        start_mode, samp_type, schedule_config = self._parse_schedule_from_row(row)
         data.pop("field_name", None)
         data.pop("filter_value", None)
         data.pop("items_json", None)
+        data.pop("schedule_json", None)
         data["interval_seconds"] = data.pop("samp_time", 60)
+        data["start_mode"] = start_mode
+        data["samp_type"] = samp_type
+        data["schedule_config"] = schedule_config
+        data["trigger_flag"] = int(data.get("trigger_flag") or 0)
+        data["trigger_time"] = int(data.get("trigger_time") or 0)
         data["source_database"] = primary["source_database"]
         data["source_table"] = primary["source_table"]
         data["fields"] = list(primary["fields"])
@@ -669,7 +702,7 @@ class Store:
             data["target_preview"] = spec["preview_rel"]
         except ValueError:
             data["target_preview"] = ""
-        for key in ("samp_type", "trigger_time", "created_at", "updated_at"):
+        for key in ("created_at", "updated_at"):
             data.pop(key, None)
         return data
 
@@ -679,6 +712,7 @@ class Store:
             **item,
             "fields": list(item["fields"]),
             "items": [{**sub, "fields": list(sub["fields"])} for sub in item.get("items", [])],
+            "schedule_config": json.loads(json.dumps(item.get("schedule_config") or {})),
         }
 
     def list_definitions(self) -> list[dict[str, Any]]:
@@ -818,6 +852,19 @@ class Store:
         primary = items[0]
         items_json = json.dumps(items, ensure_ascii=False)
 
+        start_mode, samp_type, schedule_config = normalize_schedule(
+            payload.get("start_mode"),
+            payload.get("schedule_config"),
+            samp_type=payload.get("samp_type"),
+        )
+        if start_mode == "trigger" and schedule_config.get("source") == "external":
+            ext_db = self.to_relative_path(self.resolve_path(schedule_config["database"]))
+            schedule_config["database"] = ext_db
+            if schedule_config.get("filter"):
+                # 提前校验外部触发过滤表达式语法
+                self._parse_filter(schedule_config["filter"])
+        schedule_json = json.dumps(schedule_config, ensure_ascii=False) if schedule_config else ""
+
         now = int(time.time())
         values = (
             name,
@@ -827,10 +874,12 @@ class Store:
             raw_target_name,
             items_json,
             ",".join(primary["fields"]),
-            1,
+            samp_type,
             interval,
+            schedule_json,
             primary["filter"],
             int(bool(payload.get("enabled", True))),
+            0,
             0,
             now,
             now,
@@ -840,8 +889,8 @@ class Store:
             if samp_id is None:
                 samp_id = int(
                     conn.execute(
-                        "INSERT INTO samp_define(samp_name,source_database,source_table,target_dir,target_name,items_json,field_name,samp_type,samp_time,filter_value,enabled,trigger_time,created_at,updated_at) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO samp_define(samp_name,source_database,source_table,target_dir,target_name,items_json,field_name,samp_type,samp_time,schedule_json,filter_value,enabled,trigger_flag,trigger_time,created_at,updated_at) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         values,
                     ).lastrowid
                 )
@@ -852,8 +901,8 @@ class Store:
                     if old_spec["conflict_key"] != new_spec["conflict_key"]:
                         migrated_files = self._migrate_result_databases(old_spec, new_spec)
                 conn.execute(
-                    "UPDATE samp_define SET samp_name=?,source_database=?,source_table=?,target_dir=?,target_name=?,items_json=?,field_name=?,samp_type=?,samp_time=?,filter_value=?,enabled=?,trigger_time=?,updated_at=? WHERE id=?",
-                    (*values[:12], values[13], samp_id),
+                    "UPDATE samp_define SET samp_name=?,source_database=?,source_table=?,target_dir=?,target_name=?,items_json=?,field_name=?,samp_type=?,samp_time=?,schedule_json=?,filter_value=?,enabled=?,updated_at=? WHERE id=?",
+                    (*values[:12], values[15], samp_id),
                 )
         self._invalidate_definition_cache()
         result = self.get_definition(samp_id)  # type: ignore[return-value]
@@ -876,6 +925,8 @@ class Store:
                 "name": current["samp_name"],
                 "target_dir": current.get("target_dir", ""),
                 "target_name": current.get("target_name", ""),
+                "start_mode": current.get("start_mode", "periodic"),
+                "schedule_config": current.get("schedule_config") or {},
                 "interval_seconds": current["interval_seconds"],
                 "enabled": bool(current["enabled"]),
                 "items": items,
@@ -900,6 +951,8 @@ class Store:
                 "name": current["samp_name"],
                 "target_dir": current.get("target_dir", ""),
                 "target_name": current.get("target_name", ""),
+                "start_mode": current.get("start_mode", "periodic"),
+                "schedule_config": current.get("schedule_config") or {},
                 "interval_seconds": current["interval_seconds"],
                 "enabled": bool(current["enabled"]),
                 "items": items,
@@ -924,6 +977,8 @@ class Store:
                 "name": current["samp_name"],
                 "target_dir": current.get("target_dir", ""),
                 "target_name": current.get("target_name", ""),
+                "start_mode": current.get("start_mode", "periodic"),
+                "schedule_config": current.get("schedule_config") or {},
                 "interval_seconds": current["interval_seconds"],
                 "enabled": bool(current["enabled"]),
                 "items": items,
@@ -942,13 +997,15 @@ class Store:
                 "target_name": d.get("target_name", ""),
                 "fields": d["fields"],
                 "items": d.get("items", []),
+                "start_mode": d.get("start_mode", "periodic"),
+                "schedule_config": d.get("schedule_config") or {},
                 "interval_seconds": d["interval_seconds"],
                 "filter": d["filter"],
                 "enabled": bool(d["enabled"]),
             }
             for d in self.list_definitions()
         ]
-        return {"version": 2, "exported_at": int(time.time()), "count": len(items), "items": items}
+        return {"version": 3, "exported_at": int(time.time()), "count": len(items), "items": items}
 
     def list_directories(self, max_depth: int = 6, refresh: bool = False) -> list[str]:
         """扫描 root_dir 下所有多级目录（相对路径，含根目录 '.'），带 10s 内存 TTL 缓存。"""
@@ -2295,10 +2352,16 @@ class Store:
             if mx is not None:
                 latest_sample_time = mx if latest_sample_time is None else max(latest_sample_time, mx)
 
+        start_mode, _, schedule_config = self._parse_schedule_from_row(definition)
+        keys = set(definition.keys())
         return {
             "id": samp_id,
             "name": definition["samp_name"],
             "enabled": bool(definition["enabled"]),
+            "start_mode": start_mode,
+            "schedule_config": schedule_config,
+            "trigger_flag": int(definition["trigger_flag"] or 0) if "trigger_flag" in keys else 0,
+            "trigger_time": int(definition["trigger_time"] or 0) if "trigger_time" in keys else 0,
             "interval_seconds": definition["samp_time"],
             "source_database": self.to_relative_path(items[0]["source_database"] or self.default_source_db),
             "source_table": items[0]["source_table"],
@@ -2530,3 +2593,152 @@ class Store:
         with self._meta_cache_lock:
             self._result_meta_cache.pop(db_key, None)
         return True
+
+    # ===================== 触发采样：数据库标志位检测与复位 =====================
+
+    @staticmethod
+    def _flag_matches(raw_val: Any, trigger_value: str) -> bool:
+        """判断数据库标志位值是否匹配触发值（兼容整数/浮点/字符串比较）。"""
+        if raw_val is None:
+            return False
+        s_raw = str(raw_val).strip()
+        s_tgt = str(trigger_value).strip()
+        if s_raw == s_tgt:
+            return True
+        try:
+            return abs(float(s_raw) - float(s_tgt)) < 1e-9
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _coerce_flag_literal(raw: str) -> Any:
+        text = str(raw).strip()
+        try:
+            return int(text)
+        except ValueError:
+            pass
+        try:
+            return float(text)
+        except ValueError:
+            return text
+
+    def set_trigger_flag(self, samp_id: int, value: int = 1) -> dict[str, Any] | None:
+        """设置指定采样点的内置触发标志位（samp_define.trigger_flag）。"""
+        with self._db_lock(self.definition_db), self._connect(self.definition_db) as conn:
+            cur = conn.execute(
+                "UPDATE samp_define SET trigger_flag=?, updated_at=? WHERE id=?",
+                (int(value), int(time.time()), samp_id),
+            )
+            if cur.rowcount <= 0:
+                return None
+        self._invalidate_definition_cache()
+        return self.get_definition(samp_id)
+
+    def read_builtin_trigger_flags(self, samp_ids: Iterable[int]) -> dict[int, Any]:
+        """绕过缓存直接从 samp_define 读取指定采样点的最新 trigger_flag（确保外部进程直改库可即时感知）。"""
+        ids = [int(i) for i in samp_ids]
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        with self._connect(self.definition_db) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(samp_define)").fetchall()}
+            if "trigger_flag" not in cols:
+                return {}
+            rows = conn.execute(
+                f"SELECT id, trigger_flag FROM samp_define WHERE id IN ({placeholders})",
+                ids,
+            ).fetchall()
+        return {int(r["id"]): r["trigger_flag"] for r in rows}
+
+    def reset_builtin_trigger(self, samp_id: int, sampled_at: int, reset_value: str = "0") -> None:
+        """复位内置标志位并记录本次触发时间戳 trigger_time。"""
+        val = self._coerce_flag_literal(reset_value)
+        if not isinstance(val, int):
+            val = 0
+        with self._db_lock(self.definition_db), self._connect(self.definition_db) as conn:
+            conn.execute(
+                "UPDATE samp_define SET trigger_flag=?, trigger_time=? WHERE id=?",
+                (val, int(sampled_at), samp_id),
+            )
+        self._invalidate_definition_cache()
+
+    def mark_trigger_time(self, samp_id: int, sampled_at: int) -> None:
+        """更新 samp_define.trigger_time（不修改 trigger_flag）。"""
+        with self._db_lock(self.definition_db), self._connect(self.definition_db) as conn:
+            conn.execute("UPDATE samp_define SET trigger_time=? WHERE id=?", (int(sampled_at), samp_id))
+        self._invalidate_definition_cache()
+
+    def read_external_trigger(self, cfg: dict[str, Any]) -> Any:
+        """只读方式查询外部 SQLite 数据库的标志位值。"""
+        db_path = self.resolve_path(cfg["database"])
+        if not db_path.is_file():
+            return None
+        table = str(cfg["table"])
+        column = str(cfg["column"])
+        flt = str(cfg.get("filter") or "").strip()
+        with self._connect_readonly(db_path) as conn:
+            info = conn.execute(f"PRAGMA table_info({self._quote(table)})").fetchall()
+            col_types = {str(r[1]): _normalize_sql_type(str(r[2])) for r in info}
+            if column not in col_types:
+                raise ValueError(f"外部触发标志表 {table} 缺少字段 {column}")
+            where_sql, params, _ = self._build_filter_sql(flt, col_types) if flt else ("", [], [])
+            clause = f" WHERE {where_sql}" if where_sql else ""
+            row = conn.execute(
+                f"SELECT {self._quote(column)} FROM {self._quote(table)}{clause} LIMIT 1",
+                params,
+            ).fetchone()
+            return row[0] if row is not None else None
+
+    def reset_external_trigger(self, cfg: dict[str, Any], sampled_at: int, samp_id: int | None = None) -> None:
+        """将外部 SQLite 数据库标志位复位为 reset_value，并同步记录 trigger_time。"""
+        db_path = self.resolve_path(cfg["database"])
+        if not db_path.is_file():
+            return
+        table = str(cfg["table"])
+        column = str(cfg["column"])
+        flt = str(cfg.get("filter") or "").strip()
+        reset_val = self._coerce_flag_literal(str(cfg.get("reset_value", "0")))
+        with self._db_lock(db_path), self._connect(db_path) as conn:
+            info = conn.execute(f"PRAGMA table_info({self._quote(table)})").fetchall()
+            col_types = {str(r[1]): _normalize_sql_type(str(r[2])) for r in info}
+            if column not in col_types:
+                return
+            where_sql, flt_params, _ = self._build_filter_sql(flt, col_types) if flt else ("", [], [])
+            clause = f" WHERE {where_sql}" if where_sql else ""
+            conn.execute(
+                f"UPDATE {self._quote(table)} SET {self._quote(column)}=?{clause}",
+                [reset_val, *flt_params],
+            )
+        if samp_id is not None:
+            self.mark_trigger_time(samp_id, sampled_at)
+
+    def resolve_definition_targets(
+        self,
+        ids: Iterable[int] | None = None,
+        names: Iterable[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """按 ID 列表和/或采样点名称列表解析并去重返回目标定义，任一目标不存在时抛出 KeyError。"""
+        all_defs = self.list_definitions()
+        by_id = {int(d["id"]): d for d in all_defs}
+        by_name = {str(d["samp_name"]): d for d in all_defs}
+        resolved: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        for raw_id in ids or []:
+            sid = int(raw_id)
+            if sid not in by_id:
+                raise KeyError(f"采样定义不存在: id={sid}")
+            if sid not in seen:
+                seen.add(sid)
+                resolved.append(by_id[sid])
+        for raw_name in names or []:
+            nm = str(raw_name or "").strip()
+            if not nm:
+                continue
+            if nm not in by_name:
+                raise KeyError(f"采样定义不存在: name={nm}")
+            d = by_name[nm]
+            sid = int(d["id"])
+            if sid not in seen:
+                seen.add(sid)
+                resolved.append(d)
+        return resolved

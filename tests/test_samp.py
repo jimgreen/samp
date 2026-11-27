@@ -1070,6 +1070,243 @@ def test_wal_batch_ops_scan_cache_and_storage_inspect_vacuum(tmp_path):
         assert client.get("/api/definitions").json() == []
 
 
+def test_fixed_schedule_units_and_precision_to_second(tmp_path):
+    """验证定点采样（按时/按日/按周/按月多启动点，秒级精度，含 2 月 31 日月末对齐）及调度落库精确时刻。"""
+    from datetime import datetime
+    from samp.schedule import compute_fixed_next_run, fixed_due_slots
+
+    # 1. 按时多点（精确到秒）
+    cfg_h = {"unit": "hour", "points": [{"minute": 15, "second": 5}, {"minute": 45, "second": 30}]}
+    t_a = int(datetime(2026, 5, 1, 10, 15, 4).timestamp())
+    t_b = int(datetime(2026, 5, 1, 10, 15, 5).timestamp())
+    assert fixed_due_slots(cfg_h, t_a, t_b) == [t_b]
+    nxt_h = compute_fixed_next_run(cfg_h, t_b)
+    assert nxt_h == int(datetime(2026, 5, 1, 10, 45, 30).timestamp())
+
+    # 2. 按周多点（2026-05-04 是周一 weekday=1）
+    cfg_w = {"unit": "week", "points": [{"weekday": 1, "hour": 8, "minute": 0, "second": 10}]}
+    w_before = int(datetime(2026, 5, 4, 8, 0, 9).timestamp())
+    w_exact = int(datetime(2026, 5, 4, 8, 0, 10).timestamp())
+    assert fixed_due_slots(cfg_w, w_before, w_exact) == [w_exact]
+    assert compute_fixed_next_run(cfg_w, w_exact) == int(datetime(2026, 5, 11, 8, 0, 10).timestamp())
+
+    # 3. 按月 31 日在 2026 年 2 月（平年 28 天）自动对齐 2 月 28 日
+    cfg_m = {"unit": "month", "points": [{"day": 31, "hour": 23, "minute": 59, "second": 50}]}
+    m_before = int(datetime(2026, 2, 28, 23, 59, 49).timestamp())
+    m_exact = int(datetime(2026, 2, 28, 23, 59, 50).timestamp())
+    assert fixed_due_slots(cfg_m, m_before, m_exact) == [m_exact]
+    assert compute_fixed_next_run(cfg_m, m_exact) == int(datetime(2026, 3, 31, 23, 59, 50).timestamp())
+
+    # 4. 端到端调度器定点触发验证（确认落库时间戳为精确的定点秒）
+    src_db = tmp_path / "src.db"
+    with closing(sqlite3.connect(src_db)) as conn:
+        conn.execute("CREATE TABLE m (id INTEGER PRIMARY KEY, v REAL)")
+        conn.execute("INSERT INTO m VALUES (1, 99.5)")
+        conn.commit()
+    app = create_app(
+        definition_db=tmp_path / "samp" / "samp_def.db",
+        source_db=src_db,
+        result_dir=tmp_path / "samp",
+        enable_scheduler=False,
+        root_dir=tmp_path,
+    )
+    store = app.state.store
+    sched = app.state.scheduler
+    d = store.upsert_definition(
+        {
+            "name": "daily_snap",
+            "source_database": "src.db",
+            "source_table": "m",
+            "fields": ["v"],
+            "start_mode": "fixed",
+            "schedule_config": {"unit": "day", "points": [{"hour": 9, "minute": 30, "second": 15}, {"hour": 18, "minute": 0, "second": 0}]},
+            "enabled": True,
+        }
+    )
+    assert d["start_mode"] == "fixed"
+    assert len(d["schedule_config"]["points"]) == 2
+
+    t_hit = int(datetime(2026, 6, 10, 9, 30, 15).timestamp())
+    sched.tick(force_once=False, now_override=t_hit - 2)
+    # 模拟略微延迟 1 秒进入 tick，验证落库时间仍是精确的 09:30:15
+    sched.tick(force_once=False, now_override=t_hit + 1)
+    q = store.query_samples(d["id"], t_hit - 10, t_hit + 10)
+    assert q["total_rows"] == 1
+    assert q["rows"][0]["sample_time"] == t_hit
+    logs = sched.get_logs(limit=5)
+    assert logs[0]["trigger"] == "fixed"
+
+
+def test_trigger_sampling_db_flags_and_blocking_nonblocking_api(tmp_path):
+    """验证内置/外部数据库标志位触发采样，以及单点/批量、阻塞/非阻塞外部 API 触发。"""
+    import time
+
+    src_db = tmp_path / "rt" / "plant.db"
+    flag_db = tmp_path / "rt" / "ctrl.db"
+    src_db.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(src_db)) as conn:
+        conn.execute("CREATE TABLE meter (id INTEGER PRIMARY KEY, kw REAL)")
+        conn.execute("INSERT INTO meter VALUES (1, 123.4)")
+        conn.commit()
+    with closing(sqlite3.connect(flag_db)) as conn:
+        conn.execute("CREATE TABLE flags (code TEXT PRIMARY KEY, flag INTEGER)")
+        conn.execute("INSERT INTO flags VALUES ('snap_a', 0), ('snap_edge', 0)")
+        conn.commit()
+
+    app = create_app(
+        definition_db=tmp_path / "samp" / "samp_def.db",
+        source_db=src_db,
+        result_dir=tmp_path / "samp",
+        enable_scheduler=False,
+        root_dir=tmp_path,
+    )
+    store = app.state.store
+    sched = app.state.scheduler
+
+    with TestClient(app) as client:
+        # 1. 创建内置标志位触发点 + 外部标志位自动复位点 + 外部标志位只读边沿触发点
+        d_builtin = client.post(
+            "/api/definitions",
+            json={
+                "name": "trig_builtin",
+                "source_database": "rt/plant.db",
+                "source_table": "meter",
+                "fields": ["kw"],
+                "start_mode": "trigger",
+                "schedule_config": {"source": "builtin", "trigger_value": "1", "reset_value": "0", "auto_reset": True},
+                "enabled": True,
+            },
+        ).json()
+        d_ext = client.post(
+            "/api/definitions",
+            json={
+                "name": "trig_ext",
+                "source_database": "rt/plant.db",
+                "source_table": "meter",
+                "fields": ["kw"],
+                "start_mode": "trigger",
+                "schedule_config": {
+                    "source": "external",
+                    "database": "rt/ctrl.db",
+                    "table": "flags",
+                    "column": "flag",
+                    "filter": "code='snap_a'",
+                    "trigger_value": "1",
+                    "reset_value": "0",
+                    "auto_reset": True,
+                },
+                "enabled": True,
+            },
+        ).json()
+        d_edge = client.post(
+            "/api/definitions",
+            json={
+                "name": "trig_edge",
+                "source_database": "rt/plant.db",
+                "source_table": "meter",
+                "fields": ["kw"],
+                "start_mode": "trigger",
+                "schedule_config": {
+                    "source": "external",
+                    "database": "rt/ctrl.db",
+                    "table": "flags",
+                    "column": "flag",
+                    "filter": "code='snap_edge'",
+                    "trigger_value": "1",
+                    "reset_value": "0",
+                    "auto_reset": False,
+                },
+                "enabled": True,
+            },
+        ).json()
+
+        # 初始未置位，tick 不触发
+        sched.tick(force_once=False, now_override=1700000100)
+        assert store.query_samples(d_builtin["id"], 1700000000, 1700000500)["total_rows"] == 0
+
+        # 2. 模拟其他用户直接修改 samp_define.trigger_flag=1，调度器感知采样并自动复位清 0
+        with closing(sqlite3.connect(store.definition_db)) as conn:
+            conn.execute("UPDATE samp_define SET trigger_flag=1 WHERE samp_name='trig_builtin'")
+            conn.commit()
+        sched.tick(force_once=False, now_override=1700000110)
+        assert store.query_samples(d_builtin["id"], 1700000000, 1700000500)["total_rows"] == 1
+        assert store.read_builtin_trigger_flags([d_builtin["id"]])[d_builtin["id"]] == 0
+
+        # 3. 模拟其他用户修改外部业务库 ctrl.db 的 flags.flag=1
+        with closing(sqlite3.connect(flag_db)) as conn:
+            conn.execute("UPDATE flags SET flag=1 WHERE code IN ('snap_a', 'snap_edge')")
+            conn.commit()
+        sched.tick(force_once=False, now_override=1700000120)
+        assert store.query_samples(d_ext["id"], 1700000000, 1700000500)["total_rows"] == 1
+        assert store.query_samples(d_edge["id"], 1700000000, 1700000500)["total_rows"] == 1
+        # auto_reset=True 已自动复位为 0；auto_reset=False 保持 1 但再次 tick 不会重复触发
+        with closing(sqlite3.connect(flag_db)) as conn:
+            vals = dict(conn.execute("SELECT code, flag FROM flags").fetchall())
+        assert vals["snap_a"] == 0
+        assert vals["snap_edge"] == 1
+        sched.tick(force_once=False, now_override=1700000125)
+        assert store.query_samples(d_edge["id"], 1700000000, 1700000500)["total_rows"] == 1
+
+        # 4. 外部应用 API 触发：单点阻塞（按点名）
+        r_sync = client.post("/api/trigger/trig_builtin", json={"blocking": True, "sampled_at": 1700000200})
+        assert r_sync.status_code == 200, r_sync.text
+        rs_data = r_sync.json()
+        assert rs_data["status"] == "done"
+        assert rs_data["blocking"] is True
+        assert rs_data["rows_written"] == 1
+        assert rs_data["sampled_at"] == 1700000200
+
+        # 5. 外部应用 API 触发：单点非阻塞（按 ID）+ 查询作业状态
+        r_async = client.post(f"/api/trigger/{d_ext['id']}", json={"blocking": False, "sampled_at": 1700000210})
+        assert r_async.status_code == 202, r_async.text
+        job_id = r_async.json()["job_id"]
+        deadline = time.time() + 5
+        job_state = None
+        while time.time() < deadline:
+            job_state = client.get(f"/api/trigger/jobs/{job_id}").json()
+            if job_state["status"] in ("done", "failed", "partial"):
+                break
+            time.sleep(0.05)
+        assert job_state is not None and job_state["status"] == "done"
+        assert len(job_state["completed"]) == 1
+
+        # 6. 外部应用 API 批量触发（混传 ids + names，阻塞与非阻塞各一次）
+        rb_sync = client.post(
+            "/api/trigger",
+            json={"ids": [d_builtin["id"]], "names": ["trig_ext"], "blocking": True, "sampled_at": 1700000220},
+        )
+        assert rb_sync.status_code == 200, rb_sync.text
+        assert rb_sync.json()["requested"] == 2
+        assert len(rb_sync.json()["completed"]) == 2
+        assert rb_sync.json()["failed"] == []
+
+        rb_async = client.post(
+            "/api/trigger",
+            json={"names": ["trig_builtin", "trig_ext"], "blocking": False, "sampled_at": 1700000230},
+        )
+        assert rb_async.status_code == 202, rb_async.text
+        b_job_id = rb_async.json()["job_id"]
+        deadline = time.time() + 5
+        b_state = None
+        while time.time() < deadline:
+            b_state = client.get(f"/api/trigger/jobs/{b_job_id}").json()
+            if b_state["status"] in ("done", "failed", "partial"):
+                break
+            time.sleep(0.05)
+        assert b_state is not None and b_state["status"] == "done"
+        assert len(b_state["completed"]) == 2
+
+        # 7. API 标志置位模式 + JSON 导出保留 start_mode / schedule_config
+        r_flag = client.post("/api/trigger/trig_builtin?mode=flag")
+        assert r_flag.status_code == 202
+        assert store.read_builtin_trigger_flags([d_builtin["id"]])[d_builtin["id"]] == 1
+        exported = client.get("/api/definitions/export").json()
+        by_nm = {it["name"]: it for it in exported["items"]}
+        assert by_nm["trig_ext"]["start_mode"] == "trigger"
+        assert by_nm["trig_ext"]["schedule_config"]["source"] == "external"
+
+
+
 
 
 

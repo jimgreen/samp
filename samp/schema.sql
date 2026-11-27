@@ -9,8 +9,10 @@ CREATE TABLE IF NOT EXISTS samp_define (
     items_json TEXT NOT NULL DEFAULT '',
     samp_type INTEGER NOT NULL DEFAULT 1,
     samp_time INTEGER NOT NULL DEFAULT 60 CHECK (samp_time >= 0),
+    schedule_json TEXT NOT NULL DEFAULT '',
     filter_value TEXT NOT NULL DEFAULT '',
     enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    trigger_flag INTEGER NOT NULL DEFAULT 0,
     trigger_time INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())

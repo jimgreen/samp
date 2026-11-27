@@ -601,6 +601,51 @@ function formatNumber(val) {
   return Number(num.toFixed(4)).toString();
 }
 
+function formatFixedPoint(unit, pt) {
+  const mm = pad2(pt?.minute ?? 0);
+  const ss = pad2(pt?.second ?? 0);
+  if (unit === "hour") return `${mm}:${ss}`;
+  const hh = pad2(pt?.hour ?? 0);
+  if (unit === "day") return `${hh}:${mm}:${ss}`;
+  if (unit === "week") return `${t(`fixed.w${pt?.weekday || 1}`)} ${hh}:${mm}:${ss}`;
+  return `${pt?.day || 1}${t("fixed.day_suffix")} ${hh}:${mm}:${ss}`;
+}
+
+function formatStartModeSummary(item) {
+  const mode = item?.start_mode || "periodic";
+  const cfg = item?.schedule_config || {};
+  if (mode === "fixed") {
+    const unit = cfg.unit || "day";
+    const pts = cfg.points || [];
+    const unitLabel = t(`fixed.${unit}`);
+    const formatted = pts.map((p) => formatFixedPoint(unit, p));
+    const head = formatted[0] || t("empty.dash");
+    const extra = formatted.length > 1 ? ` +${formatted.length - 1}` : "";
+    return {
+      mode,
+      shortText: `${unitLabel} ${head}${extra}`,
+      title: `${unitLabel}: ${formatted.join(", ")}`
+    };
+  }
+  if (mode === "trigger") {
+    const src = cfg.source || "builtin";
+    const val = cfg.trigger_value ?? "1";
+    if (src === "external") {
+      const shortText = `${t("mode.trigger")} ${cfg.table || ""}.${cfg.column || ""}=${val}`;
+      const title = `${cfg.database || ""}:${cfg.table || ""}.${cfg.column || ""}=${val}${cfg.filter ? ` (${cfg.filter})` : ""}`;
+      return { mode, shortText, title };
+    }
+    return {
+      mode,
+      shortText: `${t("mode.trigger")} flag=${val}`,
+      title: t("trig.api_hint", { name: item?.samp_name || item?.name || "point" })
+    };
+  }
+  const sec = Number(item?.interval_seconds ?? 0);
+  const text = sec > 0 ? `${sec}${t("unit.sec")}` : t("state.manual");
+  return { mode: "periodic", shortText: text, title: text };
+}
+
 function checkedFields(container) {
   return [...container.querySelectorAll("input[type=checkbox]:checked")].map((input) => input.value);
 }
@@ -654,6 +699,8 @@ window.SAMP = {
   formatTime,
   formatBytes,
   formatNumber,
+  formatFixedPoint,
+  formatStartModeSummary,
   checkedFields,
   setAllFields,
   renderFieldChecks

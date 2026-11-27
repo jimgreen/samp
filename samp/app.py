@@ -5,13 +5,14 @@ import csv
 import io
 import logging
 import sqlite3
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -39,6 +40,8 @@ class DefinitionIn(BaseModel):
     target_name: str = ""
     fields: list[str] = Field(default_factory=list)
     items: list[SampleItemIn] | None = None
+    start_mode: str = "periodic"  # periodic | fixed | trigger
+    schedule_config: dict[str, Any] = Field(default_factory=dict)
     interval_seconds: int = Field(default=60, ge=0)
     filter: str = ""
     enabled: bool = True
@@ -63,12 +66,28 @@ class StoragePathIn(BaseModel):
     path: str = Field(min_length=1)
 
 
+class TriggerSingleIn(BaseModel):
+    blocking: bool = True
+    sampled_at: int | None = None
+    mode: str = "direct"  # direct | flag
+
+
+class TriggerBatchIn(BaseModel):
+    ids: list[int] = Field(default_factory=list)
+    names: list[str] = Field(default_factory=list)
+    blocking: bool = True
+    sampled_at: int | None = None
+    mode: str = "direct"  # direct | flag
+
+
 class TableSampleEntryIn(BaseModel):
     source_table: str
     name: str = ""
     target_table: str = ""
     fields: list[str] = Field(default_factory=lambda: ["*"])
     filter: str = ""
+    start_mode: str = "periodic"
+    schedule_config: dict[str, Any] = Field(default_factory=dict)
     interval_seconds: int = Field(default=60, ge=0)
     enabled: bool = True
 
@@ -317,6 +336,8 @@ def create_app(
                 "name": bundle_name,
                 "target_dir": payload.target_dir,
                 "target_name": payload.target_name,
+                "start_mode": first.start_mode,
+                "schedule_config": first.schedule_config,
                 "interval_seconds": first.interval_seconds,
                 "enabled": first.enabled,
                 "items": items_payload,
@@ -346,6 +367,8 @@ def create_app(
                     "target_name": "",
                     "fields": entry.fields or ["*"],
                     "filter": entry.filter or "",
+                    "start_mode": entry.start_mode,
+                    "schedule_config": entry.schedule_config,
                     "interval_seconds": entry.interval_seconds,
                     "enabled": entry.enabled,
                 }
@@ -395,8 +418,146 @@ def create_app(
             item = store.runtime_status(samp_id)
         except KeyError as exc:
             raise HTTPException(404, str(exc))
-        item.update(scheduler.snapshot_definition(samp_id, item["interval_seconds"], item["enabled"]))
+        item.update(
+            scheduler.snapshot_definition(
+                samp_id,
+                item["interval_seconds"],
+                item["enabled"],
+                start_mode=item.get("start_mode", "periodic"),
+                schedule_config=item.get("schedule_config") or {},
+            )
+        )
         return item
+
+    # ===================== 外部应用触发采样 API（支持单点/批量、阻塞/非阻塞、直调/标志置位） =====================
+
+    async def _run_trigger_targets(
+        targets: list[dict[str, Any]],
+        blocking: bool,
+        sampled_at: int | None,
+        mode: str,
+        single: bool = False,
+    ):
+        norm_mode = (mode or "direct").strip().lower()
+        if norm_mode not in ("direct", "flag"):
+            raise HTTPException(400, "mode 仅支持 direct 或 flag")
+        if norm_mode == "flag":
+            flagged = []
+            for d in targets:
+                store.set_trigger_flag(int(d["id"]), 1)
+                flagged.append({"id": int(d["id"]), "name": str(d["samp_name"]), "trigger_flag": 1})
+            return JSONResponse(
+                status_code=202,
+                content={"status": "flagged", "mode": "flag", "requested": len(flagged), "items": flagged},
+            )
+        if not blocking:
+            job = scheduler.submit_async_trigger(targets, sampled_at=sampled_at, trigger="api")
+            return JSONResponse(status_code=202, content=job)
+
+        started = time.perf_counter()
+        if single:
+            target = targets[0]
+            try:
+                res = await execute_sample(int(target["id"]), sampled_at=sampled_at, trigger="api")
+            except KeyError as exc:
+                raise HTTPException(404, str(exc))
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
+            return {"status": "done", "blocking": True, **res}
+
+        results = await asyncio.gather(
+            *(execute_sample(int(d["id"]), sampled_at=sampled_at, trigger="api") for d in targets),
+            return_exceptions=True,
+        )
+        completed, failed = [], []
+        for d, r in zip(targets, results):
+            if isinstance(r, Exception):
+                failed.append({"id": int(d["id"]), "name": str(d["samp_name"]), "error": str(r)})
+            else:
+                completed.append(r)
+        status_text = "done" if not failed else ("failed" if not completed else "partial")
+        return {
+            "status": status_text,
+            "blocking": True,
+            "requested": len(targets),
+            "completed": completed,
+            "failed": failed,
+            "duration_ms": round((time.perf_counter() - started) * 1000.0, 2),
+        }
+
+    @app.get("/api/trigger/jobs")
+    def list_trigger_jobs(limit: int = Query(50, ge=1, le=200)):
+        return {"jobs": scheduler.list_trigger_jobs(limit=limit)}
+
+    @app.get("/api/trigger/jobs/{job_id}")
+    def get_trigger_job(job_id: str):
+        job = scheduler.get_trigger_job(job_id)
+        if job is None:
+            raise HTTPException(404, "触发作业不存在")
+        return job
+
+    @app.post("/api/trigger")
+    async def trigger_batch_api(payload: TriggerBatchIn):
+        """批量（或单点）API 触发采样：支持按 ids / names 定位，支持 blocking=true 阻塞与 blocking=false 非阻塞。"""
+        if not payload.ids and not payload.names:
+            raise HTTPException(400, "ids 或 names 至少需提供一项")
+        try:
+            targets = store.resolve_definition_targets(ids=payload.ids, names=payload.names)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc))
+        if not targets:
+            raise HTTPException(400, "未匹配到有效采样定义")
+        return await _run_trigger_targets(
+            targets,
+            blocking=payload.blocking,
+            sampled_at=payload.sampled_at,
+            mode=payload.mode,
+            single=False,
+        )
+
+    @app.post("/api/trigger/{target}")
+    async def trigger_single_api(
+        target: str,
+        blocking: bool | None = None,
+        sampled_at: int | None = None,
+        mode: str | None = None,
+        payload: TriggerSingleIn | None = Body(default=None),
+    ):
+        """单点 API 触发采样：target 支持数字 ID 或采样点名称，支持阻塞/非阻塞及标志置位模式。"""
+        eff_blocking = blocking if blocking is not None else (payload.blocking if payload is not None else True)
+        eff_ts = sampled_at if sampled_at is not None else (payload.sampled_at if payload is not None else None)
+        eff_mode = mode if mode is not None else (payload.mode if payload is not None else "direct")
+        try:
+            if target.isdigit():
+                targets = store.resolve_definition_targets(ids=[int(target)])
+            else:
+                targets = store.resolve_definition_targets(names=[target])
+        except KeyError as exc:
+            raise HTTPException(404, str(exc))
+        return await _run_trigger_targets(
+            targets,
+            blocking=eff_blocking,
+            sampled_at=eff_ts,
+            mode=eff_mode,
+            single=True,
+        )
+
+    @app.post("/api/definitions/{samp_id}/trigger")
+    async def trigger_definition_alias(
+        samp_id: int,
+        blocking: bool | None = None,
+        sampled_at: int | None = None,
+        mode: str | None = None,
+        payload: TriggerSingleIn | None = Body(default=None),
+    ):
+        """采样定义单点触发快捷接口（同 /api/trigger/{id}）。"""
+        return await trigger_single_api(
+            str(samp_id),
+            blocking=blocking,
+            sampled_at=sampled_at,
+            mode=mode,
+            payload=payload,
+        )
 
     @app.get("/api/query/{samp_id}/times")
     def query_times(
