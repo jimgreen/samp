@@ -103,7 +103,9 @@ function onLangChange(fn) {
   _i18nListeners.push(fn);
 }
 
-/* ===================== 8 主题风格预设与双色色卡引擎 ===================== */
+/* ===================== 14 主题与三语统一紧凑选择器 ===================== */
+const LANG_SHORT = { "zh-CN": "中", "en-US": "EN", "ru-RU": "RU" };
+const LANG_FULL = { "zh-CN": "中文", "en-US": "EN", "ru-RU": "RU" };
 let _themePickerNodes = null;
 
 function _swatchDotsHtml(theme) {
@@ -114,9 +116,17 @@ function _swatchDotsHtml(theme) {
 function syncThemePickerUI() {
   if (!_themePickerNodes) return;
   const cur = getTheme();
+  const lang = getLang();
   const sw = THEME_SWATCHES[cur] || THEME_SWATCHES["minimalist-light"];
-  _themePickerNodes.btn.innerHTML = `${_swatchDotsHtml(cur)}<span class="theme-swatch-label">${esc(t(sw.key))}</span><span class="tree-caret">▾</span>`;
-  _themePickerNodes.btn.title = t("theme.toggle");
+  const shortLang = LANG_SHORT[lang] || "中";
+  _themePickerNodes.btn.innerHTML = `${_swatchDotsHtml(cur)}<span class="pref-lang-code">${esc(shortLang)}</span><span class="tree-caret">▾</span>`;
+  _themePickerNodes.btn.title = `${t(sw.key)} · ${LANG_FULL[lang] || lang}`;
+
+  const langBar = SUPPORTED_LANGS.map((code) => {
+    const active = code === lang ? " active" : "";
+    return `<button type="button" class="pref-lang-btn${active}" data-lang-id="${code}">${esc(LANG_FULL[code] || code)}</button>`;
+  }).join("");
+
   const lightIds = SUPPORTED_THEMES.filter((id) => THEME_SWATCHES[id].group === "light");
   const darkIds = SUPPORTED_THEMES.filter((id) => THEME_SWATCHES[id].group === "dark");
   const renderOpts = (ids) =>
@@ -127,24 +137,30 @@ function syncThemePickerUI() {
         return `<button type="button" class="theme-opt${active}" data-theme-id="${id}">${_swatchDotsHtml(id)}<span>${esc(t(meta.key))}</span></button>`;
       })
       .join("");
+
   _themePickerNodes.menu.innerHTML =
-    `<div class="theme-group-title">${esc(t("theme.group_light"))}</div>${renderOpts(lightIds)}` +
-    `<div class="theme-group-title">${esc(t("theme.group_dark"))}</div>${renderOpts(darkIds)}`;
+    `<div class="pref-lang-row"><span class="pref-section-label">${esc(t("lang.label"))}</span><div class="pref-lang-seg">${langBar}</div></div>` +
+    `<div class="theme-group-title">${esc(t("theme.group_light"))}</div><div class="theme-grid">${renderOpts(lightIds)}</div>` +
+    `<div class="theme-group-title">${esc(t("theme.group_dark"))}</div><div class="theme-grid">${renderOpts(darkIds)}</div>`;
+
+  const langSel = $("lang-select");
+  if (langSel && langSel.value !== lang) langSel.value = lang;
 }
 
-function initThemePicker(themeSelect) {
+function initThemePicker(themeSelect, langSelect) {
   if (!themeSelect || _themePickerNodes) return;
   const wrap = document.createElement("div");
   wrap.className = "theme-picker";
   const btn = document.createElement("button");
   btn.type = "button";
   btn.id = "theme-picker-btn";
-  btn.className = "theme-swatch-btn";
+  btn.className = "theme-swatch-btn pref-trigger";
   const menu = document.createElement("div");
   menu.id = "theme-picker-menu";
-  menu.className = "theme-menu";
+  menu.className = "theme-menu pref-menu";
 
   themeSelect.classList.add("hidden");
+  if (langSelect) langSelect.classList.add("hidden");
   themeSelect.parentNode.insertBefore(wrap, themeSelect);
   wrap.appendChild(btn);
   wrap.appendChild(menu);
@@ -156,6 +172,11 @@ function initThemePicker(themeSelect) {
     menu.classList.toggle("open");
   });
   menu.addEventListener("click", (event) => {
+    const langOpt = event.target.closest("[data-lang-id]");
+    if (langOpt) {
+      setLang(langOpt.dataset.langId);
+      return;
+    }
     const opt = event.target.closest("[data-theme-id]");
     if (!opt) return;
     applyTheme(opt.dataset.themeId);
@@ -616,8 +637,9 @@ async function pollConnHealth() {
         sideEnabled.textContent = `${data.enabled ?? 0} / ${data.definitions ?? 0}`;
       }
       const sideDbs = $("side-dbs");
-      if (sideDbs && data.result_dbs !== undefined) {
-        sideDbs.textContent = String(data.result_dbs);
+      const dbCount = data.result_databases ?? data.result_dbs;
+      if (sideDbs && dbCount !== undefined) {
+        sideDbs.textContent = String(dbCount);
       }
     }
   } catch {
@@ -639,15 +661,15 @@ function initChrome({ pollGlobalAlarms = true } = {}) {
     topbar.appendChild(bar);
   }
   const themeSelect = $("theme-select");
-  if (themeSelect) {
-    themeSelect.value = getTheme();
-    themeSelect.addEventListener("change", (event) => applyTheme(event.target.value));
-    initThemePicker(themeSelect);
-  }
   const langSelect = $("lang-select");
   if (langSelect) {
     langSelect.value = getLang();
     langSelect.addEventListener("change", (event) => setLang(event.target.value));
+  }
+  if (themeSelect) {
+    themeSelect.value = getTheme();
+    themeSelect.addEventListener("change", (event) => applyTheme(event.target.value));
+    initThemePicker(themeSelect, langSelect);
   }
   const pill = $("alarm-pill");
   if (pill) {
