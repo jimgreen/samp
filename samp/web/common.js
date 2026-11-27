@@ -26,14 +26,20 @@ const ICONS = {
 };
 
 const THEME_SWATCHES = {
-  "minimalist-light": { key: "theme.light", bg: "#F8FAFC", accent: "#2563EB" },
-  "precision-dark": { key: "theme.dark", bg: "#0D1117", accent: "#58A6FF" },
-  "bento-grid": { key: "theme.bento", bg: "#F2F4F8", accent: "#0066FF" },
-  glassmorphism: { key: "theme.glass", bg: "#1E1B4B", accent: "#60A5FA" },
-  editorial: { key: "theme.editorial", bg: "#FAF8F5", accent: "#B45309" },
-  "sci-fi-cyan": { key: "theme.cyan", bg: "#040812", accent: "#00E5FF" },
-  "sci-fi-purple": { key: "theme.purple", bg: "#090614", accent: "#C084FC" },
-  "sci-fi-matrix": { key: "theme.matrix", bg: "#040D08", accent: "#00E676" }
+  "minimalist-light": { key: "theme.light", bg: "#F4F6F8", accent: "#2563EB", group: "light" },
+  "arctic-frost": { key: "theme.arctic", bg: "#F0F6FB", accent: "#0284C7", group: "light" },
+  "warm-paper": { key: "theme.warm", bg: "#F6F2E9", accent: "#15803D", group: "light" },
+  "slate-daylight": { key: "theme.slate", bg: "#EDF1F5", accent: "#1D4ED8", group: "light" },
+  "bento-grid": { key: "theme.bento", bg: "#F5F5F7", accent: "#0071E3", group: "light" },
+  editorial: { key: "theme.editorial", bg: "#FAF9F6", accent: "#9F1239", group: "light" },
+  "precision-dark": { key: "theme.dark", bg: "#0B0F19", accent: "#38BDF8", group: "dark" },
+  "ocean-slate": { key: "theme.ocean", bg: "#071422", accent: "#38BDF8", group: "dark" },
+  "nord-dark": { key: "theme.nord", bg: "#242933", accent: "#88C0D0", group: "dark" },
+  "industrial-amber": { key: "theme.amber", bg: "#121110", accent: "#F59E0B", group: "dark" },
+  glassmorphism: { key: "theme.glass", bg: "#0F172A", accent: "#60A5FA", group: "dark" },
+  "sci-fi-cyan": { key: "theme.cyan", bg: "#040812", accent: "#00E5FF", group: "dark" },
+  "sci-fi-purple": { key: "theme.purple", bg: "#090614", accent: "#C084FC", group: "dark" },
+  "sci-fi-matrix": { key: "theme.matrix", bg: "#040D08", accent: "#00E676", group: "dark" }
 };
 
 /* ===================== 多语言引擎（i18n） ===================== */
@@ -42,21 +48,13 @@ const THEME_STORAGE_KEY = "samp_theme";
 const ACK_STORAGE_KEY = "samp_acked_alarms";
 const SIDEBAR_WIDTH_KEY = "samp_sidebar_width";
 const SIDEBAR_COLLAPSED_KEY = "samp_sidebar_collapsed";
-const SIDEBAR_DEFAULT_WIDTH = 188;
-const SIDEBAR_MIN_WIDTH = 136;
+const SIDEBAR_DEFAULT_WIDTH = 192;
+const SIDEBAR_MIN_WIDTH = 148;
 const SIDEBAR_MAX_WIDTH = 320;
 const SIDEBAR_SNAP_HIDE = 96;
 const SUPPORTED_LANGS = ["zh-CN", "en-US", "ru-RU"];
-const SUPPORTED_THEMES = [
-  "minimalist-light",
-  "precision-dark",
-  "bento-grid",
-  "glassmorphism",
-  "editorial",
-  "sci-fi-cyan",
-  "sci-fi-purple",
-  "sci-fi-matrix"
-];
+const SUPPORTED_THEMES = Object.keys(THEME_SWATCHES);
+const DARK_THEMES = new Set(SUPPORTED_THEMES.filter((k) => THEME_SWATCHES[k].group === "dark"));
 const _i18nListeners = [];
 const _themeListeners = [];
 
@@ -119,11 +117,19 @@ function syncThemePickerUI() {
   const sw = THEME_SWATCHES[cur] || THEME_SWATCHES["minimalist-light"];
   _themePickerNodes.btn.innerHTML = `${_swatchDotsHtml(cur)}<span class="theme-swatch-label">${esc(t(sw.key))}</span><span class="tree-caret">▾</span>`;
   _themePickerNodes.btn.title = t("theme.toggle");
-  _themePickerNodes.menu.innerHTML = SUPPORTED_THEMES.map((id) => {
-    const meta = THEME_SWATCHES[id];
-    const active = id === cur ? " active" : "";
-    return `<button type="button" class="theme-opt${active}" data-theme-id="${id}">${_swatchDotsHtml(id)}<span>${esc(t(meta.key))}</span></button>`;
-  }).join("");
+  const lightIds = SUPPORTED_THEMES.filter((id) => THEME_SWATCHES[id].group === "light");
+  const darkIds = SUPPORTED_THEMES.filter((id) => THEME_SWATCHES[id].group === "dark");
+  const renderOpts = (ids) =>
+    ids
+      .map((id) => {
+        const meta = THEME_SWATCHES[id];
+        const active = id === cur ? " active" : "";
+        return `<button type="button" class="theme-opt${active}" data-theme-id="${id}">${_swatchDotsHtml(id)}<span>${esc(t(meta.key))}</span></button>`;
+      })
+      .join("");
+  _themePickerNodes.menu.innerHTML =
+    `<div class="theme-group-title">${esc(t("theme.group_light"))}</div>${renderOpts(lightIds)}` +
+    `<div class="theme-group-title">${esc(t("theme.group_dark"))}</div>${renderOpts(darkIds)}`;
 }
 
 function initThemePicker(themeSelect) {
@@ -171,6 +177,7 @@ function getTheme() {
 function applyTheme(theme) {
   const target = SUPPORTED_THEMES.includes(theme) ? theme : "minimalist-light";
   document.documentElement.setAttribute("data-theme", target);
+  document.documentElement.setAttribute("data-color-scheme", DARK_THEMES.has(target) ? "dark" : "light");
   localStorage.setItem(THEME_STORAGE_KEY, target);
   const sel = $("theme-select");
   if (sel) sel.value = target;
@@ -393,10 +400,41 @@ function initSidebar() {
   }
 }
 
+/* ===================== 顶栏 Web 连接巡检（对齐 SCADA workbench.js） ===================== */
+let _connOk = null;
+
+function renderConnStatus() {
+  const node = $("web-conn-status");
+  if (!node) return;
+  if (_connOk === true) {
+    node.className = "conn-status ok";
+    node.textContent = t("conn.ok");
+  } else if (_connOk === false) {
+    node.className = "conn-status error";
+    node.textContent = t("conn.err");
+  } else {
+    node.className = "conn-status";
+    node.textContent = t("conn.checking");
+  }
+}
+
+async function pollConnHealth() {
+  const node = $("web-conn-status");
+  if (!node) return;
+  try {
+    const res = await fetch("/api/health");
+    const data = res.ok ? await res.json() : null;
+    _connOk = Boolean(data && data.status === "ok");
+  } catch {
+    _connOk = false;
+  }
+  renderConnStatus();
+}
+
 function initChrome({ pollGlobalAlarms = true } = {}) {
   applyTheme(getTheme());
   initSidebar();
-  const topbar = document.querySelector(".topbar");
+  const topbar = document.querySelector(".workbench-topbar, .topbar");
   if (topbar && !$("top-progress")) {
     const bar = document.createElement("div");
     bar.id = "top-progress";
@@ -439,6 +477,12 @@ function initChrome({ pollGlobalAlarms = true } = {}) {
   });
   applyI18nToDOM();
   syncThemePickerUI();
+  renderConnStatus();
+  pollConnHealth();
+  setInterval(() => {
+    if (!document.hidden) pollConnHealth();
+  }, 15000);
+  onLangChange(renderConnStatus);
   if (pollGlobalAlarms) {
     pollAlarms();
     setInterval(pollAlarms, 20000);
